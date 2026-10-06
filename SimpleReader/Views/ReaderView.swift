@@ -36,7 +36,7 @@ struct ReaderView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { Button("完成") { closing = true; Task { await session.close(); dismiss() } }.disabled(closing) }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button { showContents = true } label: { Image(systemName: "list.bullet") }.accessibilityLabel("目录")
+                    Button { showContents = true } label: { Image(systemName: "list.bullet") }.accessibilityLabel("目录").disabled(!session.ready)
                     if store.book(session.bookID)?.format == .epub { Button { showPreferences = true } label: { Image(systemName: "textformat.size") }.accessibilityLabel("阅读设置") }
                     Button { Task { await session.synchronize() } } label: { Image(systemName: "arrow.triangle.2.circlepath") }.accessibilityLabel("同步进度")
                 }
@@ -45,10 +45,7 @@ struct ReaderView: View {
         .task { await session.load() }
         .onChange(of: phase) { value in Task { if value == .active { await session.synchronize() } else if value == .background { await session.background() } } }
         .sheet(isPresented: $showContents) {
-            NavigationView {
-                List(session.contents) { item in Button(item.title) { showContents = false; Task { await session.go(item) } } }.navigationTitle("目录")
-                    .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { showContents = false } } }
-            }.navigationViewStyle(.stack)
+            ReaderContentsView(session: session)
         }
         .sheet(isPresented: $showPreferences) { ReaderPreferencesView(store: store, onChange: { session.updatePreferences() }) }
         .alert(item: $session.prompt) { prompt in
@@ -61,6 +58,64 @@ struct ReaderView: View {
             }
         }
         .errorAlert($session.error)
+    }
+}
+private struct ReaderContentsView: View {
+    @ObservedObject var session: ReaderSession
+    @Environment(\.dismiss) private var dismiss
+    @State private var locating = true
+    private let positionID = "current-reading-position"
+
+    var body: some View {
+        NavigationView {
+            ScrollViewReader { proxy in
+                List {
+                    if !locating && session.currentContentsID == nil { currentPosition }
+                    ForEach(session.contents) { item in
+                        Button {
+                            dismiss()
+                            Task { await session.go(item) }
+                        } label: {
+                            HStack(spacing: 16) {
+                                Text(item.title).foregroundColor(.primary)
+                                Spacer(minLength: 8)
+                                if let page = item.pdfPage {
+                                    Text("\(page + 1)").font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
+                                }
+                            }.padding(.vertical, 8)
+                        }
+                        if !locating && item.id == session.currentContentsID { currentPosition }
+                    }
+                }
+                .listStyle(.plain)
+                .overlay { if locating { ProgressView("正在定位…") } }
+                .task {
+                    await session.refreshContentsPosition()
+                    guard !Task.isCancelled else { return }
+                    locating = false
+                }
+                .onChange(of: locating) { value in
+                    if !value { proxy.scrollTo(positionID, anchor: .center) }
+                }
+            }
+            .navigationTitle("目录").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } } }
+        }.navigationViewStyle(.stack)
+    }
+
+    private var currentPosition: some View {
+        Button { dismiss() } label: {
+            HStack(spacing: 16) {
+                Label("当前位置", systemImage: "book")
+                    .foregroundColor(.accentColor)
+                Spacer(minLength: 8)
+                Text(session.progressLabel)
+                    .font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
+            }.padding(.vertical, 8)
+        }
+        .id(positionID)
+        .accessibilityLabel("当前位置，\(session.progressLabel)")
+        .accessibilityHint("关闭目录，继续阅读")
     }
 }
 struct ReaderPreferencesView: View {
