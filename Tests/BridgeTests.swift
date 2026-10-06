@@ -111,14 +111,8 @@ import ReadiumNavigator
         let window = UIWindow(windowScene: scene); window.rootViewController = session.container; window.makeKeyAndVisible()
         defer { window.isHidden = true }
         await session.load()
-        try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertTrue(session.ready)
-        if store.book(book.id)?.position?.xpointer == nil, let nav = session.container.children.first as? EPUBNavigatorViewController {
-            print("BRIDGE DIAGNOSTIC parent \(session.container.view.bounds) child \(nav.view.bounds) href \(nav.currentLocation?.href.string ?? "nil")")
-            do { print("ORIGINAL SPINE", try await readium.spine(file)) } catch { print("SPINE ERROR", error) }
-            do { print("DOM", try await nav.evaluateJavaScript("JSON.stringify({w:innerWidth,h:innerHeight,body:document.body.innerHTML.slice(0,300),rect:document.body.getBoundingClientRect().toJSON()})").get()) } catch { print("DOM ERROR",error) }
-            if let loc = nav.currentLocation { do { print("CAPTURE",try await EPUBPositionBridge.capture(navigator: nav, locator: loc)) } catch { print("CAPTURE ERROR",error) } }
-        }
+        XCTAssertNil(session.error)
         XCTAssertNotNil(store.book(book.id)?.position?.xpointer, "Embedded Readium must expose visible text")
         XCTAssertFalse(store.book(book.id)!.pendingSync, "Opening a new book is not a user edit")
         await session.turn(forward: true)
@@ -126,6 +120,27 @@ import ReadiumNavigator
         await session.flush()
         XCTAssertGreaterThan(store.book(book.id)?.position?.progression ?? 0, 0, "Progress must advance within a small compressed chapter")
         XCTAssertTrue(store.book(book.id)!.pendingSync)
+    }
+    func testEPUBLoadsAfterContainerAppearsWithoutCreatingPendingUpload() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let file = Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/sample.epub")
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: file)
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium, sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        // Exercise embedding after the parent's appearance transition has finished.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        await session.load()
+        XCTAssertTrue(session.ready)
+        XCTAssertNil(session.error)
+        XCTAssertNotNil(store.book(book.id)?.position?.xpointer)
+        XCTAssertFalse(store.book(book.id)!.pendingSync)
+        await session.close()
+        XCTAssertFalse(store.book(book.id)!.pendingSync, "Closing an untouched book is not a user edit")
     }
     func testOpeningAndRestoringPDFDoesNotCreatePendingUpload() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

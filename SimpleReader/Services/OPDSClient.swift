@@ -4,7 +4,6 @@ struct OPDSLink: Equatable {
     let url: URL
     let rel: String
     let type: String
-    let title: String
     var isAcquisition: Bool { rel.hasPrefix("http://opds-spec.org/acquisition") && ["application/epub+zip", "application/pdf"].contains(type) }
 }
 struct OPDSEntry: Identifiable {
@@ -48,7 +47,7 @@ final class OPDSParser: NSObject, XMLParserDelegate {
         if elementName == "feed", namespaceURI == "http://www.w3.org/2005/Atom" { sawFeed = true }
         if elementName == "entry" { entry = OPDSEntry(id: UUID().uuidString, title: "未命名图书", author: "", summary: "", links: []) }
         if elementName == "link", let href = attributes["href"], let url = URL(string: href, relativeTo: currentBase)?.absoluteURL {
-            let link = OPDSLink(url: url, rel: attributes["rel"] ?? "alternate", type: (attributes["type"] ?? "").components(separatedBy: ";")[0].trimmingCharacters(in: .whitespaces), title: attributes["title"] ?? "")
+            let link = OPDSLink(url: url, rel: attributes["rel"] ?? "alternate", type: (attributes["type"] ?? "").components(separatedBy: ";")[0].trimmingCharacters(in: .whitespaces))
             if entry != nil { entry?.links.append(link) } else { catalog.links.append(link) }
         }
     }

@@ -74,7 +74,7 @@ import Combine
     init(store: LibraryStore, readium: ReadiumService) { self.store = store; self.readium = readium }
 
     func importBook(from source: URL, filename: String? = nil) async throws -> Book {
-        let name = (filename ?? source.lastPathComponent as NSString as String)
+        let name = filename ?? source.lastPathComponent
         guard let format = BookFormat(rawValue: (name as NSString).pathExtension.lowercased()) else { throw AppFailure("请选择 EPUB 或 PDF 文件") }
         let access = source.startAccessingSecurityScopedResource()
         defer { if access { source.stopAccessingSecurityScopedResource() } }
