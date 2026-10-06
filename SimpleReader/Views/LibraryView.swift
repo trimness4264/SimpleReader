@@ -11,7 +11,9 @@ struct LibraryView: View {
     @State private var importedBook: Book?
     @State private var error: String?
     @State private var selected: Book?
-    @State private var deleting: Book?
+    @State private var deleting: [Book] = []
+    @State private var selecting = false
+    @State private var selectedIDs: Set<UUID> = []
     @State private var recentOnly = false
     init(environment: AppEnvironment) { self.environment = environment; store = environment.store }
     private var books: [Book] {
@@ -33,7 +35,7 @@ struct LibraryView: View {
                         Text(message).font(.callout)
                         HStack {
                             if let book = importedBook {
-                                Button("打开阅读") { selected = book }
+                                Button("打开阅读") { selected = book }.disabled(selecting)
                             }
                             Spacer()
                             Button("收起") { importMessage = nil; importedBook = nil }
@@ -41,6 +43,15 @@ struct LibraryView: View {
                     }.padding().background(Color.accentColor.opacity(0.1)).cornerRadius(12)
                 }
                 Picker("显示", selection: $recentOnly) { Text("全部图书").tag(false); Text("最近阅读").tag(true) }.pickerStyle(.segmented)
+                if selecting {
+                    HStack {
+                        Text("已选择 \(selectedIDs.count) 本").foregroundColor(.secondary)
+                        Spacer()
+                        Button(selectedIDs.count == books.count && !books.isEmpty ? "取消全选" : "全选") {
+                            selectedIDs = selectedIDs.count == books.count ? [] : Set(books.map(\.id))
+                        }.disabled(books.isEmpty)
+                    }
+                }
                 if books.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "book.closed").font(.system(size: 48)).foregroundColor(.secondary)
@@ -51,15 +62,38 @@ struct LibraryView: View {
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 200), spacing: 20)], alignment: .leading, spacing: 24) {
                     ForEach(books) { book in
-                        Button { selected = book } label: { BookTile(book: book, root: store.root) }
-                            .buttonStyle(.plain)
-                            .contextMenu { Button(role: .destructive) { deleting = book } label: { Label("删除图书", systemImage: "trash") } }
+                        bookButton(book)
                     }
                 }
             }.padding(20)
         }
         .navigationTitle("书库")
-        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { if busy { ProgressView() } else { Button { importing = true } label: { Image(systemName: "plus") }.accessibilityLabel("导入图书") } } }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                if selecting {
+                    Button("完成") { finishSelection() }
+                } else {
+                    Button("选择") { selectedIDs.removeAll(); selecting = true }.disabled(books.isEmpty || busy)
+                    if busy { ProgressView() }
+                    else { Button { importing = true } label: { Image(systemName: "plus") }.accessibilityLabel("导入图书") }
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if selecting {
+                Button(role: .destructive) { deleting = books.filter { selectedIDs.contains($0.id) } } label: {
+                    Label("删除所选（\(selectedIDs.count)）", systemImage: "trash").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered).disabled(selectedIDs.isEmpty)
+                .padding().background(.regularMaterial)
+            }
+        }
+        .onChange(of: recentOnly) { _ in selectedIDs.removeAll() }
+        .onChange(of: store.books.map(\.id)) { ids in
+            selectedIDs.formIntersection(Set(ids))
+            if books.isEmpty { finishSelection() }
+            if let book = importedBook, !ids.contains(book.id) { importedBook = nil; importMessage = nil }
+        }
         .sheet(isPresented: $importing) {
             DocumentImportPicker { files in
                 importing = false
@@ -67,15 +101,44 @@ struct LibraryView: View {
             }
         }
         .fullScreenCover(item: $selected) { book in ReaderView(bookID: book.id, environment: environment) }
-        .alert("删除图书？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { book in
-            Button("取消", role: .cancel) { deleting = nil }
+        .alert("删除 \(deleting.count) 本图书？", isPresented: Binding(get: { !deleting.isEmpty }, set: { if !$0 { deleting = [] } }), presenting: deleting) { booksToDelete in
+            Button("取消", role: .cancel) { deleting = [] }
             Button("删除", role: .destructive) {
                 // Use the presented value: iOS 15 can clear the binding before this action runs.
-                do { try store.delete(book) } catch { self.error = error.localizedDescription }
-                deleting = nil
+                do {
+                    try store.delete(booksToDelete)
+                    finishSelection()
+                } catch { self.error = error.localizedDescription }
+                deleting = []
             }
         } message: { _ in Text("移除本机文件和阅读记录，服务器上的图书会保留。") }
         .errorAlert($error)
+    }
+    private func finishSelection() {
+        selecting = false
+        selectedIDs.removeAll()
+    }
+    @ViewBuilder private func bookButton(_ book: Book) -> some View {
+        let button = Button {
+            if selecting {
+                if !selectedIDs.insert(book.id).inserted { selectedIDs.remove(book.id) }
+            } else { selected = book }
+        } label: {
+            BookTile(book: book, root: store.root)
+                .overlay(alignment: .topTrailing) {
+                    if selecting {
+                        Image(systemName: selectedIDs.contains(book.id) ? "checkmark.circle.fill" : "circle")
+                            .font(.title2).foregroundColor(selectedIDs.contains(book.id) ? .accentColor : .secondary)
+                            .padding(6).background(.regularMaterial, in: Circle()).padding(8)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(book.title)
+        .accessibilityValue(selecting ? (selectedIDs.contains(book.id) ? "已选择" : "未选择") : "")
+        .accessibilityHint(selecting ? "轻点切换选择状态" : "轻点打开阅读")
+        if selecting { button }
+        else { button.contextMenu { Button(role: .destructive) { deleting = [book] } label: { Label("删除图书", systemImage: "trash") } } }
     }
     @MainActor private func importFiles(_ files: [URL]) async {
         guard !busy, !files.isEmpty else { return }

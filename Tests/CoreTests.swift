@@ -80,6 +80,39 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(second.books.first, book)
         XCTAssertEqual(second.settings.sync.deviceID, device)
     }
+    @MainActor func testBatchDeletionRemovesOnlySelectedBooksAndPersistsAcrossReload() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root)
+        var fixtures: [Book] = []
+        for index in 0..<3 {
+            var book = sampleBook()
+            book.filePath = "Books/\(index).epub"
+            book.coverPath = "Covers/\(index).jpg"
+            book.pendingSync = true
+            try Data("book".utf8).write(to: store.fileURL(book.filePath))
+            try Data("cover".utf8).write(to: store.fileURL(book.coverPath!))
+            try store.save(book)
+            fixtures.append(book)
+        }
+        let deviceID = store.settings.sync.deviceID
+        try store.delete([fixtures[0], fixtures[2], fixtures[0]])
+        XCTAssertEqual(store.books, [fixtures[1]])
+        for book in [fixtures[0], fixtures[2]] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: store.fileURL(book.filePath).path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: store.fileURL(book.coverPath!).path))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(fixtures[1].filePath).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(fixtures[1].coverPath!).path))
+        try store.delete([])
+        try store.delete([fixtures[0]])
+        let reloaded = try LibraryStore(root: root)
+        XCTAssertEqual(reloaded.books, [fixtures[1]])
+        XCTAssertEqual(reloaded.settings.sync.deviceID, deviceID)
+        try reloaded.delete(fixtures[1])
+        XCTAssertTrue(reloaded.books.isEmpty)
+        XCTAssertTrue(try LibraryStore(root: root).books.isEmpty)
+    }
     @MainActor func testOfflineUploadChecksRemoteAndRetainsChangesMadeDuringUpload() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

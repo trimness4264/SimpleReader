@@ -78,13 +78,24 @@ import CoreData
         } catch { context.rollback(); throw error }
     }
     func delete(_ book: Book) throws {
+        try delete([book])
+    }
+    func delete(_ candidates: [Book]) throws {
+        let ids = Set(candidates.map(\.id))
+        let deletedBooks = books.filter { ids.contains($0.id) }
+        guard !deletedBooks.isEmpty else { return }
         // Commit deletion first; cleanup is recoverable and never leaves a live record with a missing file.
-        if let record = try record(book.id.uuidString) {
-            container.viewContext.delete(record)
-            do { try container.viewContext.save() } catch { container.viewContext.rollback(); throw error }
+        let context = container.viewContext
+        do {
+            for book in deletedBooks {
+                if let record = try record(book.id.uuidString) { context.delete(record) }
+            }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        books.removeAll { ids.contains($0.id) }
+        for book in deletedBooks {
+            try? FileManager.default.removeItem(at: fileURL(book.filePath))
+            if let path = book.coverPath { try? FileManager.default.removeItem(at: fileURL(path)) }
         }
-        books.removeAll { $0.id == book.id }
-        try? FileManager.default.removeItem(at: fileURL(book.filePath))
-        if let path = book.coverPath { try? FileManager.default.removeItem(at: fileURL(path)) }
     }
 }
