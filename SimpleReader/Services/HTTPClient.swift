@@ -63,24 +63,24 @@ final class HTTPClient {
         }
         return request
     }
-    static func check(_ response: URLResponse) throws {
+    private static func check(_ response: URLResponse) throws -> HTTPURLResponse {
         guard let response = response as? HTTPURLResponse else { throw AppFailure("服务器响应无效") }
         guard (200...299).contains(response.statusCode) else {
             throw AppFailure(response.statusCode == 401 || response.statusCode == 403 ? "认证失败，请检查账号与密码" : "服务器返回 HTTP \(response.statusCode)")
         }
+        return response
     }
     func data(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         guard let url = request.url else { throw AppFailure("地址无效") }
         try NetworkPolicy.validate(url)
         let (data, response) = try await session.data(for: request, delegate: CredentialGuard(origin: url))
-        try Self.check(response)
-        return (data, response as! HTTPURLResponse)
+        return (data, try Self.check(response))
     }
     func download(_ request: URLRequest, progress: @escaping (Double) -> Void) async throws -> (URL, HTTPURLResponse) {
         guard let url = request.url else { throw AppFailure("地址无效") }
         try NetworkPolicy.validate(url)
         let (file, response) = try await session.download(for: request, delegate: TransferDelegate(origin: url, progress: progress))
-        do { try Self.check(response) } catch { try? FileManager.default.removeItem(at: file); throw error }
-        return (file, response as! HTTPURLResponse)
+        do { return (file, try Self.check(response)) }
+        catch { try? FileManager.default.removeItem(at: file); throw error }
     }
 }

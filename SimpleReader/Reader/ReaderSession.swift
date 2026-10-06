@@ -2,7 +2,6 @@ import SwiftUI
 import PDFKit
 import ReadiumShared
 import ReadiumNavigator
-import WebKit
 
 struct ContentsItem: Identifiable {
     let id = UUID()
@@ -98,10 +97,10 @@ struct SyncPrompt: Identifiable {
                     Task { @MainActor in self?.pdfChanged() }
                 }
             }
-            ready = true
             // Allow layout and the initial location event to finish before tracking user movement.
             try await Task.sleep(nanoseconds: 350_000_000)
             try await initialCheckpoint()
+            ready = true
             suppressChanges = false
             await synchronize(flushFirst: false)
         } catch { self.error = error.localizedDescription; suppressChanges = false }
@@ -110,12 +109,15 @@ struct SyncPrompt: Identifiable {
         guard var book = store.book(bookID) else { return }
         var position: ReadingPosition?
         if let navigator = epub {
-            for _ in 0..<20 {
+            // WebKit cold starts can outlast the usual two-second chapter load.
+            // Keep restoration events suppressed until the initial checkpoint is saved.
+            for _ in 0..<100 {
+                try Task.checkCancellation()
                 if let location = navigator.currentLocation {
                     let locator = adjusted(location)
                     let pointer = try? await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine)
-                    if pointer == nil { try await Task.sleep(nanoseconds: 100_000_000); continue }
-                    position = ReadingPosition(progression: locator.locations.totalProgression ?? 0, locatorJSON: locator.jsonString, xpointer: pointer ?? current?.xpointer, updatedAt: current?.updatedAt ?? Date())
+                    guard let pointer = pointer else { try await Task.sleep(nanoseconds: 100_000_000); continue }
+                    position = ReadingPosition(progression: locator.locations.totalProgression ?? 0, locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: current?.updatedAt ?? Date())
                     break
                 }
                 try await Task.sleep(nanoseconds: 100_000_000)
@@ -187,8 +189,8 @@ struct SyncPrompt: Identifiable {
         if let locator = epub?.currentLocation { await captureEPUB(locator, generation: captureGeneration) }
         else { pdfChanged() }
     }
-    func close() async { await flush(); await synchronize(); closed = true }
-    func background() async { await flush(); await synchronize() }
+    func close() async { await background(); closed = true }
+    func background() async { await flush(); await synchronize(flushFirst: false) }
     func turn(forward: Bool) async {
         if let epub = epub { if forward { await epub.goForward() } else { await epub.goBackward() } }
         else if let pdf = pdf, let doc = pdf.document, let page = pdf.currentPage {
@@ -253,8 +255,22 @@ struct SyncPrompt: Identifiable {
 }
 
 @MainActor final class ReaderContainerController: UIViewController {
+    private var appeared = false
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        appeared = true
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        appeared = false
+        super.viewWillDisappear(animated)
+    }
     func embed(_ child: UIViewController) {
         addChild(child)
+        child.view.frame = view.bounds
+        // UIKit forwards an in-flight parent appearance transition automatically.
+        // Only start a separate transition when the parent has already appeared.
+        if appeared { child.beginAppearanceTransition(true, animated: false) }
         view.addSubview(child.view)
         child.view.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -265,8 +281,6 @@ struct SyncPrompt: Identifiable {
         ])
         child.didMove(toParent: self)
         view.setNeedsLayout(); view.layoutIfNeeded()
-        // This child is installed asynchronously after the parent appeared.
-        // Forward appearance now, with its final bounds, so Readium computes its viewport.
-        if view.window != nil { child.beginAppearanceTransition(true, animated: false); child.endAppearanceTransition() }
+        if appeared { child.endAppearanceTransition() }
     }
 }

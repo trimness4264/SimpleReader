@@ -45,35 +45,15 @@ xcodebuild -project SimpleReader.xcodeproj -scheme SimpleReader \
 
 ## 打包 unsigned IPA
 
-在安装完整 Xcode 的 Mac 上，从项目根目录执行。此流程将当前工作区构建为真机 Release 版本，关闭代码签名，无需配置 Apple 开发者账号。首次构建需要网络下载 SPM 依赖。
+在安装完整 Xcode 的 Mac 上，从项目任意目录运行下面的脚本。脚本会构建真机 Release archive，关闭代码签名，再将 `.app` 打包到 IPA 的 `Payload` 目录。首次构建需要网络下载 SPM 依赖。
 
 ```sh
-# 1. 构建未签名的真机 archive。
-xcodebuild -project SimpleReader.xcodeproj -scheme SimpleReader \
-  -configuration Release -destination 'generic/platform=iOS' \
-  -derivedDataPath .build/DerivedData \
-  -archivePath .build/unsigned/SimpleReader.xcarchive \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' archive
-
-# 2. 将 .app 放入 IPA 要求的 Payload 目录，再生成 ZIP 格式的 IPA。
-# 仅在上一步出现 ARCHIVE SUCCEEDED 后继续。
-ipa_stage=$(mktemp -d /tmp/simple-reader-ipa.XXXXXX)
-mkdir -p "$ipa_stage/Payload"
-ditto --norsrc --noextattr \
-  .build/unsigned/SimpleReader.xcarchive/Products/Applications/SimpleReader.app \
-  "$ipa_stage/Payload/SimpleReader.app"
-ditto -c -k --norsrc --noextattr --keepParent "$ipa_stage/Payload" \
-  .build/unsigned/SimpleReader-unsigned.ipa
-
-# 3. 验证压缩包完整性和主程序的签名状态。
-unzip -t .build/unsigned/SimpleReader-unsigned.ipa
-codesign -dv "$ipa_stage/Payload/SimpleReader.app"
+./Scripts/build_unsigned_ipa.sh
 ```
 
-产物：`.build/unsigned/SimpleReader-unsigned.ipa`。`unzip -t` 应通过，`codesign -dv` 应报告 `code object is not signed at all`（该检查返回非零退出码是预期结果）。临时 Payload 目录保留在 `$ipa_stage`，可在检查后删除。
+产物：`.build/unsigned/SimpleReader-unsigned.ipa`。脚本会在 archive 构建成功后打包，并在系统提供 `unzip` 时检查 IPA 压缩包完整性。archive 保存在 `.build/unsigned/SimpleReader.xcarchive`，中间打包目录会自动清理。
 
-未签名 IPA 需要通过签名工具重新签名后才能安装到普通 iPhone / iPad；不要直接使用 `xcodebuild -exportArchive` 导出此未签名 archive，因为常规导出流程需要签名配置。`.build` 已被 Git 忽略，构建产物不会进入代码提交。
+未签名 IPA 需要通过签名工具重新签名后才能安装到普通 iPhone / iPad。`.build` 已被 Git 忽略，构建产物不会进入代码提交。
 
 ## 本地联调，不使用真实账号
 

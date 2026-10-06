@@ -62,7 +62,7 @@ final class NetworkTests: XCTestCase {
     func testOpenSearchAndQueryEscaping() async throws {
         let client = OPDSClient(http: http())
         MockURLProtocol.handle = { _ in (200, Data("<OpenSearchDescription xmlns='http://a9.com/-/spec/opensearch/1.1/'><Url type='application/atom+xml' template='https://example.com/search?q={searchTerms}&amp;page={startPage?}'/></OpenSearchDescription>".utf8)) }
-        let link = OPDSLink(url: URL(string: "https://example.com/search.xml")!, rel: "search", type: "application/opensearchdescription+xml", title: "")
+        let link = OPDSLink(url: URL(string: "https://example.com/search.xml")!, rel: "search", type: "application/opensearchdescription+xml")
         let url = try await client.searchURL(link: link, query: "中文 & a+b", credentials: nil)
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
         XCTAssertEqual(items.first { $0.name == "q" }?.value, "中文 & a+b")
