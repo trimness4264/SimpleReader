@@ -23,6 +23,7 @@ struct SyncPrompt: Identifiable {
     @Published var bridgeWarning: String?
     @Published var progression: Double = 0
     @Published var contents: [ContentsItem] = []
+    @Published private(set) var currentContentsID: UUID?
     @Published var prompt: SyncPrompt?
     private let store: LibraryStore
     private let readium: ReadiumService
@@ -49,6 +50,77 @@ struct SyncPrompt: Identifiable {
     }
     deinit { if let token = pageObserver { NotificationCenter.default.removeObserver(token) }; saving?.cancel() }
     var title: String { store.book(bookID)?.title ?? "阅读" }
+    var progressLabel: String {
+        if let document = pdf?.document, let page = pdf?.currentPage {
+            return "第 \(document.index(for: page) + 1) / \(document.pageCount) 页"
+        }
+        return "\(Int(min(max(progression, 0), 1) * 100))%"
+    }
+
+    /// Refresh the contents marker from the visible page without moving or saving it.
+    func refreshContentsPosition() async {
+        currentContentsID = nil
+        if let document = pdf?.document, let page = pdf?.currentPage {
+            let index = document.index(for: page)
+            currentContentsID = contents.last(where: { ($0.pdfPage ?? Int.max) <= index })?.id
+            return
+        }
+        guard let navigator = epub, let locator = navigator.currentLocation else { return }
+        let href = EPUBPositionBridge.normalize(locator.href.string)
+        let candidates = contents.filter { item in
+            item.link.map { EPUBPositionBridge.normalize($0.href) == href } ?? false
+        }
+        // A chapter can span resources which have no separate contents entry.
+        let order = navigator.publication.readingOrder.map { EPUBPositionBridge.normalize($0.href) }
+        let precedingEntry: ContentsItem?
+        if let resourceIndex = order.firstIndex(of: href) {
+            precedingEntry = contents.last { item in
+                guard let link = item.link,
+                      let index = order.firstIndex(of: EPUBPositionBridge.normalize(link.href)) else { return false }
+                return index < resourceIndex
+            }
+        } else {
+            precedingEntry = nil
+        }
+        // The resource's first entry is a safe fallback when visible text is unavailable.
+        currentContentsID = candidates.first?.id ?? precedingEntry?.id
+        guard !candidates.isEmpty else { return }
+        do {
+            let pointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine.isEmpty ? nil : originalSpine)
+            let fragments = candidates.map { item in
+                item.link?.href.components(separatedBy: "#").dropFirst().joined(separator: "#") ?? ""
+            }
+            let json = String(decoding: try JSONSerialization.data(withJSONObject: fragments), as: UTF8.self)
+            let result = try await navigator.evaluateJavaScript("""
+                (() => {
+                    const location = SimpleReaderBridge.resolve(\(try EPUBPositionBridge.quoted(pointer)));
+                    const element = document.querySelector(location.cssSelector);
+                    if (!element) return -1;
+                    const node = element.childNodes[location.textNodeIndex] || element;
+                    const fragments = \(json);
+                    let current = -1;
+                    fragments.forEach((fragment, index) => {
+                        if (!fragment) { current = index; return; }
+                        let id = fragment;
+                        try { id = decodeURIComponent(fragment); } catch (_) {}
+                        const target = document.getElementById(id);
+                        if (target && (target === node || target.contains(node) ||
+                            (target.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING))) {
+                            current = index;
+                        }
+                    });
+                    return current;
+                })()
+                """).get()
+            if let index = result as? Int, candidates.indices.contains(index) {
+                currentContentsID = candidates[index].id
+            } else if (result as? Int) == -1 {
+                currentContentsID = precedingEntry?.id
+            }
+        } catch {
+            // Keep the resource-level marker for image-only or unsupported EPUB content.
+        }
+    }
     func load() async {
         guard !loading else { return }; loading = true
         do {
@@ -69,7 +141,7 @@ struct SyncPrompt: Identifiable {
                     progressionRanges[EPUBPositionBridge.normalize(order[index].href)] = starts[index]...max(starts[index], end)
                 }
                 let locator = try book.position?.locatorJSON.flatMap { try Locator(jsonString: $0) }
-                let navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: locator, config: .init(preferences: preferences()))
+                let navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: locator, config: .init(preferences: preferences(), fontFamilyDeclarations: try ReaderFonts.declarations()))
                 navigator.delegate = self; epub = navigator
                 container.embed(navigator)
                 func flatten(_ links: [ReadiumShared.Link], depth: Int = 0) -> [ContentsItem] {
@@ -134,7 +206,7 @@ struct SyncPrompt: Identifiable {
     }
     private func preferences() -> EPUBPreferences {
         let settings = store.settings.reader
-        return EPUBPreferences(columnCount: .one, fontSize: settings.fontSize / 100, publisherStyles: false, theme: settings.theme == "dark" ? .dark : settings.theme == "sepia" ? .sepia : .light)
+        return EPUBPreferences(columnCount: .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, theme: settings.theme == "dark" ? .dark : settings.theme == "sepia" ? .sepia : .light)
     }
     private func adjusted(_ locator: Locator) -> Locator {
         guard let progression = locator.locations.progression,
@@ -251,6 +323,40 @@ struct SyncPrompt: Identifiable {
             if epub != nil && !approximate { prompt = SyncPrompt(kind: .approximate, remote: remote) }
             else { self.error = error.localizedDescription }
         }
+    }
+}
+
+private enum ReaderFonts {
+    static let latin: FontFamily = "Source Serif 4"
+    static let cjk: FontFamily = "LXGW WenKai"
+
+    static func declarations() throws -> [AnyHTMLFontFamilyDeclaration] {
+        func face(_ name: String, style: CSSFontStyle = .normal, weight: CSSStandardFontWeight = .normal) throws -> CSSFontFace {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts"),
+                  let file = FileURL(url: url) else {
+                throw AppFailure("阅读字体缺失：\(name)")
+            }
+            return CSSFontFace(file: file, style: style, weight: .standard(weight))
+        }
+
+        // Latin first: WenKai also contains Latin glyphs, so reversing this stack
+        // would prevent mixed-language books from using Source Serif for Western text.
+        return [
+            CSSFontFamilyDeclaration(
+                fontFamily: latin,
+                alternates: [cjk, .serif],
+                fontFaces: [
+                    try face("SourceSerif4-Regular"),
+                    try face("SourceSerif4-It", style: .italic),
+                    try face("SourceSerif4-Bold", weight: .bold),
+                    try face("SourceSerif4-BoldIt", style: .italic, weight: .bold)
+                ]
+            ).eraseToAnyHTMLFontFamilyDeclaration(),
+            CSSFontFamilyDeclaration(
+                fontFamily: cjk,
+                fontFaces: [try face("LXGWWenKai-Regular")]
+            ).eraseToAnyHTMLFontFamilyDeclaration()
+        ]
     }
 }
 

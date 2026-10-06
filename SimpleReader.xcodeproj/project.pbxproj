@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		000000000000000000000063 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000062 /* Fonts */; };
 		000000000000000000000061 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000060 /* Assets.xcassets */; };
 		000000000000000000000029 /* SimpleReader/App/SimpleReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */; };
 		00000000000000000000002A /* SimpleReader/Models/Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000002 /* SimpleReader/Models/Models.swift */; };
@@ -52,6 +53,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		000000000000000000000062 /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = SimpleReader/Resources/Fonts; sourceTree = "<group>"; };
 		000000000000000000000060 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = SimpleReader/Resources/Assets.xcassets; sourceTree = "<group>"; };
 		000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/App/SimpleReaderApp.swift; sourceTree = "<group>"; };
 		000000000000000000000002 /* SimpleReader/Models/Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Models/Models.swift; sourceTree = "<group>"; };
@@ -140,6 +142,7 @@
 				000000000000000000000013 /* SimpleReader/Views/RootView.swift */,
 				000000000000000000000014 /* SimpleReader/Views/SettingsView.swift */,
 				000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */,
+				000000000000000000000062 /* Fonts */,
 				000000000000000000000060 /* Assets.xcassets */,
 				000000000000000000000019 /* SimpleReader/Resources/LICENSE.txt */,
 				00000000000000000000001A /* SimpleReader/Resources/Licenses */,
@@ -233,6 +236,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000042 /* SimpleReader/Resources/EPUBPositionBridge.js in Resources */,
+				000000000000000000000063 /* Fonts in Resources */,
 				000000000000000000000061 /* Assets.xcassets in Resources */,
 				000000000000000000000043 /* SimpleReader/Resources/LICENSE.txt in Resources */,
 				000000000000000000000044 /* SimpleReader/Resources/Licenses in Resources */,
