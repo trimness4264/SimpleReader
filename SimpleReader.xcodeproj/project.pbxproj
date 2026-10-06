@@ -1,0 +1,495 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		000000000000000000000061 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000060 /* Assets.xcassets */; };
+		000000000000000000000029 /* SimpleReader/App/SimpleReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */; };
+		00000000000000000000002A /* SimpleReader/Models/Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000002 /* SimpleReader/Models/Models.swift */; };
+		00000000000000000000002B /* SimpleReader/Persistence/KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000003 /* SimpleReader/Persistence/KeychainService.swift */; };
+		00000000000000000000002C /* SimpleReader/Persistence/LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000004 /* SimpleReader/Persistence/LibraryStore.swift */; };
+		00000000000000000000002D /* SimpleReader/Reader/EPUBPositionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000005 /* SimpleReader/Reader/EPUBPositionBridge.swift */; };
+		00000000000000000000002E /* SimpleReader/Reader/ReaderSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000006 /* SimpleReader/Reader/ReaderSession.swift */; };
+		00000000000000000000002F /* SimpleReader/Services/BookHashing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000007 /* SimpleReader/Services/BookHashing.swift */; };
+		000000000000000000000030 /* SimpleReader/Services/BookImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000008 /* SimpleReader/Services/BookImportService.swift */; };
+		000000000000000000000031 /* SimpleReader/Services/DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000009 /* SimpleReader/Services/DownloadManager.swift */; };
+		000000000000000000000032 /* SimpleReader/Services/EPUBSpine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000A /* SimpleReader/Services/EPUBSpine.swift */; };
+		000000000000000000000033 /* SimpleReader/Services/HTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000B /* SimpleReader/Services/HTTPClient.swift */; };
+		000000000000000000000034 /* SimpleReader/Services/KOReaderSyncClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000C /* SimpleReader/Services/KOReaderSyncClient.swift */; };
+		000000000000000000000035 /* SimpleReader/Services/OPDSClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000D /* SimpleReader/Services/OPDSClient.swift */; };
+		000000000000000000000036 /* SimpleReader/Services/ReadiumService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000E /* SimpleReader/Services/ReadiumService.swift */; };
+		000000000000000000000037 /* SimpleReader/Views/DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000F /* SimpleReader/Views/DownloadsView.swift */; };
+		000000000000000000000038 /* SimpleReader/Views/LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000010 /* SimpleReader/Views/LibraryView.swift */; };
+		000000000000000000000039 /* SimpleReader/Views/OPDSViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000011 /* SimpleReader/Views/OPDSViews.swift */; };
+		00000000000000000000003A /* SimpleReader/Views/ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000012 /* SimpleReader/Views/ReaderView.swift */; };
+		00000000000000000000003B /* SimpleReader/Views/RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000013 /* SimpleReader/Views/RootView.swift */; };
+		00000000000000000000003C /* SimpleReader/Views/SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000014 /* SimpleReader/Views/SettingsView.swift */; };
+		00000000000000000000003E /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000023 /* ReadiumShared */; };
+		00000000000000000000003F /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000024 /* ReadiumStreamer */; };
+		000000000000000000000040 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000025 /* ReadiumNavigator */; };
+		000000000000000000000042 /* SimpleReader/Resources/EPUBPositionBridge.js in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */; };
+		000000000000000000000043 /* SimpleReader/Resources/LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000019 /* SimpleReader/Resources/LICENSE.txt */; };
+		000000000000000000000044 /* SimpleReader/Resources/Licenses in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001A /* SimpleReader/Resources/Licenses */; };
+		000000000000000000000045 /* SimpleReader/Resources/THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001B /* SimpleReader/Resources/THIRD_PARTY_NOTICES.md */; };
+		000000000000000000000051 /* Tests/BridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000015 /* Tests/BridgeTests.swift */; };
+		000000000000000000000052 /* Tests/CoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000016 /* Tests/CoreTests.swift */; };
+		000000000000000000000053 /* Tests/NetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000017 /* Tests/NetworkTests.swift */; };
+		000000000000000000000056 /* Tests/Fixtures in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001C /* Tests/Fixtures */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		00000000000000000000004C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 00000000000000000000004B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000000000047;
+			remoteInfo = SimpleReader;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		000000000000000000000060 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = SimpleReader/Resources/Assets.xcassets; sourceTree = "<group>"; };
+		000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/App/SimpleReaderApp.swift; sourceTree = "<group>"; };
+		000000000000000000000002 /* SimpleReader/Models/Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Models/Models.swift; sourceTree = "<group>"; };
+		000000000000000000000003 /* SimpleReader/Persistence/KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Persistence/KeychainService.swift; sourceTree = "<group>"; };
+		000000000000000000000004 /* SimpleReader/Persistence/LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Persistence/LibraryStore.swift; sourceTree = "<group>"; };
+		000000000000000000000005 /* SimpleReader/Reader/EPUBPositionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/EPUBPositionBridge.swift; sourceTree = "<group>"; };
+		000000000000000000000006 /* SimpleReader/Reader/ReaderSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReaderSession.swift; sourceTree = "<group>"; };
+		000000000000000000000007 /* SimpleReader/Services/BookHashing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/BookHashing.swift; sourceTree = "<group>"; };
+		000000000000000000000008 /* SimpleReader/Services/BookImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/BookImportService.swift; sourceTree = "<group>"; };
+		000000000000000000000009 /* SimpleReader/Services/DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/DownloadManager.swift; sourceTree = "<group>"; };
+		00000000000000000000000A /* SimpleReader/Services/EPUBSpine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/EPUBSpine.swift; sourceTree = "<group>"; };
+		00000000000000000000000B /* SimpleReader/Services/HTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/HTTPClient.swift; sourceTree = "<group>"; };
+		00000000000000000000000C /* SimpleReader/Services/KOReaderSyncClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/KOReaderSyncClient.swift; sourceTree = "<group>"; };
+		00000000000000000000000D /* SimpleReader/Services/OPDSClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/OPDSClient.swift; sourceTree = "<group>"; };
+		00000000000000000000000E /* SimpleReader/Services/ReadiumService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/ReadiumService.swift; sourceTree = "<group>"; };
+		00000000000000000000000F /* SimpleReader/Views/DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/DownloadsView.swift; sourceTree = "<group>"; };
+		000000000000000000000010 /* SimpleReader/Views/LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/LibraryView.swift; sourceTree = "<group>"; };
+		000000000000000000000011 /* SimpleReader/Views/OPDSViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/OPDSViews.swift; sourceTree = "<group>"; };
+		000000000000000000000012 /* SimpleReader/Views/ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/ReaderView.swift; sourceTree = "<group>"; };
+		000000000000000000000013 /* SimpleReader/Views/RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/RootView.swift; sourceTree = "<group>"; };
+		000000000000000000000014 /* SimpleReader/Views/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/SettingsView.swift; sourceTree = "<group>"; };
+		000000000000000000000015 /* Tests/BridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/BridgeTests.swift; sourceTree = "<group>"; };
+		000000000000000000000016 /* Tests/CoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/CoreTests.swift; sourceTree = "<group>"; };
+		000000000000000000000017 /* Tests/NetworkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/NetworkTests.swift; sourceTree = "<group>"; };
+		000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */ = {isa = PBXFileReference; lastKnownFileType = text; path = SimpleReader/Resources/EPUBPositionBridge.js; sourceTree = "<group>"; };
+		000000000000000000000019 /* SimpleReader/Resources/LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SimpleReader/Resources/LICENSE.txt; sourceTree = "<group>"; };
+		00000000000000000000001A /* SimpleReader/Resources/Licenses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = SimpleReader/Resources/Licenses; sourceTree = "<group>"; };
+		00000000000000000000001B /* SimpleReader/Resources/THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = text; path = SimpleReader/Resources/THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
+		00000000000000000000001C /* Tests/Fixtures */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Tests/Fixtures; sourceTree = "<group>"; };
+		00000000000000000000001D /* SimpleReader/Resources/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = SimpleReader/Resources/Info.plist; sourceTree = "<group>"; };
+		00000000000000000000001E /* SimpleReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = SimpleReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		00000000000000000000001F /* SimpleReaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = SimpleReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		000000000000000000000041 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				00000000000000000000003E /* ReadiumShared in Frameworks */,
+				00000000000000000000003F /* ReadiumStreamer in Frameworks */,
+				000000000000000000000040 /* ReadiumNavigator in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000000055 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		000000000000000000000020 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				00000000000000000000001E /* SimpleReader.app */,
+				00000000000000000000001F /* SimpleReaderTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		000000000000000000000021 = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */,
+				000000000000000000000002 /* SimpleReader/Models/Models.swift */,
+				000000000000000000000003 /* SimpleReader/Persistence/KeychainService.swift */,
+				000000000000000000000004 /* SimpleReader/Persistence/LibraryStore.swift */,
+				000000000000000000000005 /* SimpleReader/Reader/EPUBPositionBridge.swift */,
+				000000000000000000000006 /* SimpleReader/Reader/ReaderSession.swift */,
+				000000000000000000000007 /* SimpleReader/Services/BookHashing.swift */,
+				000000000000000000000008 /* SimpleReader/Services/BookImportService.swift */,
+				000000000000000000000009 /* SimpleReader/Services/DownloadManager.swift */,
+				00000000000000000000000A /* SimpleReader/Services/EPUBSpine.swift */,
+				00000000000000000000000B /* SimpleReader/Services/HTTPClient.swift */,
+				00000000000000000000000C /* SimpleReader/Services/KOReaderSyncClient.swift */,
+				00000000000000000000000D /* SimpleReader/Services/OPDSClient.swift */,
+				00000000000000000000000E /* SimpleReader/Services/ReadiumService.swift */,
+				00000000000000000000000F /* SimpleReader/Views/DownloadsView.swift */,
+				000000000000000000000010 /* SimpleReader/Views/LibraryView.swift */,
+				000000000000000000000011 /* SimpleReader/Views/OPDSViews.swift */,
+				000000000000000000000012 /* SimpleReader/Views/ReaderView.swift */,
+				000000000000000000000013 /* SimpleReader/Views/RootView.swift */,
+				000000000000000000000014 /* SimpleReader/Views/SettingsView.swift */,
+				000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */,
+				000000000000000000000060 /* Assets.xcassets */,
+				000000000000000000000019 /* SimpleReader/Resources/LICENSE.txt */,
+				00000000000000000000001A /* SimpleReader/Resources/Licenses */,
+				00000000000000000000001B /* SimpleReader/Resources/THIRD_PARTY_NOTICES.md */,
+				000000000000000000000015 /* Tests/BridgeTests.swift */,
+				000000000000000000000016 /* Tests/CoreTests.swift */,
+				000000000000000000000017 /* Tests/NetworkTests.swift */,
+				00000000000000000000001C /* Tests/Fixtures */,
+				00000000000000000000001D /* SimpleReader/Resources/Info.plist */,
+				000000000000000000000020 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		000000000000000000000047 /* SimpleReader */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000000028 /* Build configuration list for PBXNativeTarget "SimpleReader" */;
+			buildPhases = (
+				00000000000000000000003D /* Sources */,
+				000000000000000000000041 /* Frameworks */,
+				000000000000000000000046 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SimpleReader;
+			packageProductDependencies = (
+				000000000000000000000023 /* ReadiumShared */,
+				000000000000000000000024 /* ReadiumStreamer */,
+				000000000000000000000025 /* ReadiumNavigator */,
+			);
+			productName = SimpleReader;
+			productReference = 00000000000000000000001E /* SimpleReader.app */;
+			productType = "com.apple.product-type.application";
+		};
+		000000000000000000000058 /* SimpleReaderTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000000050 /* Build configuration list for PBXNativeTarget "SimpleReaderTests" */;
+			buildPhases = (
+				000000000000000000000054 /* Sources */,
+				000000000000000000000055 /* Frameworks */,
+				000000000000000000000057 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				00000000000000000000004D /* PBXTargetDependency */,
+			);
+			name = SimpleReaderTests;
+			productName = SimpleReaderTests;
+			productReference = 00000000000000000000001F /* SimpleReaderTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		00000000000000000000004B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 00000000000000000000004A /* Build configuration list for PBXProject "SimpleReader" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = zh_CN;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				zh_CN,
+				Base,
+			);
+			mainGroup = 000000000000000000000021;
+			packageReferences = (
+				000000000000000000000022 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
+			);
+			productRefGroup = 000000000000000000000020 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				000000000000000000000047 /* SimpleReader */,
+				000000000000000000000058 /* SimpleReaderTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		000000000000000000000046 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000042 /* SimpleReader/Resources/EPUBPositionBridge.js in Resources */,
+				000000000000000000000061 /* Assets.xcassets in Resources */,
+				000000000000000000000043 /* SimpleReader/Resources/LICENSE.txt in Resources */,
+				000000000000000000000044 /* SimpleReader/Resources/Licenses in Resources */,
+				000000000000000000000045 /* SimpleReader/Resources/THIRD_PARTY_NOTICES.md in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000000057 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000056 /* Tests/Fixtures in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		00000000000000000000003D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000029 /* SimpleReader/App/SimpleReaderApp.swift in Sources */,
+				00000000000000000000002A /* SimpleReader/Models/Models.swift in Sources */,
+				00000000000000000000002B /* SimpleReader/Persistence/KeychainService.swift in Sources */,
+				00000000000000000000002C /* SimpleReader/Persistence/LibraryStore.swift in Sources */,
+				00000000000000000000002D /* SimpleReader/Reader/EPUBPositionBridge.swift in Sources */,
+				00000000000000000000002E /* SimpleReader/Reader/ReaderSession.swift in Sources */,
+				00000000000000000000002F /* SimpleReader/Services/BookHashing.swift in Sources */,
+				000000000000000000000030 /* SimpleReader/Services/BookImportService.swift in Sources */,
+				000000000000000000000031 /* SimpleReader/Services/DownloadManager.swift in Sources */,
+				000000000000000000000032 /* SimpleReader/Services/EPUBSpine.swift in Sources */,
+				000000000000000000000033 /* SimpleReader/Services/HTTPClient.swift in Sources */,
+				000000000000000000000034 /* SimpleReader/Services/KOReaderSyncClient.swift in Sources */,
+				000000000000000000000035 /* SimpleReader/Services/OPDSClient.swift in Sources */,
+				000000000000000000000036 /* SimpleReader/Services/ReadiumService.swift in Sources */,
+				000000000000000000000037 /* SimpleReader/Views/DownloadsView.swift in Sources */,
+				000000000000000000000038 /* SimpleReader/Views/LibraryView.swift in Sources */,
+				000000000000000000000039 /* SimpleReader/Views/OPDSViews.swift in Sources */,
+				00000000000000000000003A /* SimpleReader/Views/ReaderView.swift in Sources */,
+				00000000000000000000003B /* SimpleReader/Views/RootView.swift in Sources */,
+				00000000000000000000003C /* SimpleReader/Views/SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000000054 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000051 /* Tests/BridgeTests.swift in Sources */,
+				000000000000000000000052 /* Tests/CoreTests.swift in Sources */,
+				000000000000000000000053 /* Tests/NetworkTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		00000000000000000000004D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000000000047 /* SimpleReader */;
+			targetProxy = 00000000000000000000004C /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		000000000000000000000026 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				INFOPLIST_FILE = SimpleReader/Resources/Info.plist;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leo.SimpleReader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		000000000000000000000027 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				INFOPLIST_FILE = SimpleReader/Resources/Info.plist;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leo.SimpleReader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		000000000000000000000048 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		000000000000000000000049 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		00000000000000000000004E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leo.SimpleReaderTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SimpleReader.app/SimpleReader";
+			};
+			name = Debug;
+		};
+		00000000000000000000004F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leo.SimpleReaderTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SimpleReader.app/SimpleReader";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		000000000000000000000028 /* Build configuration list for PBXNativeTarget "SimpleReader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000026 /* Debug */,
+				000000000000000000000027 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		00000000000000000000004A /* Build configuration list for PBXProject "SimpleReader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000048 /* Debug */,
+				000000000000000000000049 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000000050 /* Build configuration list for PBXNativeTarget "SimpleReaderTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				00000000000000000000004E /* Debug */,
+				00000000000000000000004F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		000000000000000000000022 /* XCRemoteSwiftPackageReference "swift-toolkit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/readium/swift-toolkit.git";
+			requirement = {
+				kind = exactVersion;
+				version = 3.8.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		000000000000000000000023 /* ReadiumShared */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000022 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumShared;
+		};
+		000000000000000000000024 /* ReadiumStreamer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000022 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumStreamer;
+		};
+		000000000000000000000025 /* ReadiumNavigator */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000022 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
+			productName = ReadiumNavigator;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 00000000000000000000004B /* Project object */;
+}
