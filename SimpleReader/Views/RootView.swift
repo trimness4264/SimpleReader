@@ -2,10 +2,39 @@ import SwiftUI
 
 struct RootView: View {
     let environment: AppEnvironment
+    @ObservedObject private var sharedImports: SharedBookImportCoordinator
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var importError: String?
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var selectedTab = 0
+    init(environment: AppEnvironment) {
+        self.environment = environment
+        sharedImports = environment.sharedImports
+    }
     var body: some View {
-        content.onOpenURL { url in Task { do { _ = try await environment.importer.importBook(from: url) } catch { importError = error.localizedDescription } } }.errorAlert($importError)
+        content
+            .onOpenURL { url in
+                guard url.isFileURL else { return }
+                selectedTab = 0
+                sharedImports.receive(url)
+            }
+            .task { _ = sharedImports.recoverInbox() }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active { sharedImports.recoverInbox() }
+            }
+            .onChange(of: sharedImports.pendingCount) { count in
+                if count > 0 { selectedTab = 0 }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if sharedImports.pendingCount > 0 {
+                    HStack { ProgressView(); Text("正在导入分享的图书…") }
+                        .padding().frame(maxWidth: .infinity).background(.regularMaterial)
+                }
+            }
+            .alert(sharedImports.error == nil ? "图书已导入" : "操作未完成", isPresented: Binding(get: {
+                sharedImports.pendingCount == 0 && (sharedImports.message != nil || sharedImports.error != nil)
+            }, set: { if !$0 { sharedImports.message = nil; sharedImports.error = nil } })) {
+                Button("好", role: .cancel) { sharedImports.message = nil; sharedImports.error = nil }
+            } message: { Text(sharedImports.error ?? sharedImports.message ?? "") }
     }
     @ViewBuilder private var content: some View {
         if sizeClass == .regular {
@@ -19,11 +48,11 @@ struct RootView: View {
                 LibraryView(environment: environment)
             }
         } else {
-            TabView {
-                NavigationView { LibraryView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("书库", systemImage: "books.vertical") }
-                NavigationView { ServersView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("在线书库", systemImage: "network") }
-                NavigationView { DownloadsView(manager: environment.downloads) }.navigationViewStyle(.stack).tabItem { Label("下载", systemImage: "arrow.down.circle") }
-                NavigationView { SettingsView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("设置", systemImage: "gearshape") }
+            TabView(selection: $selectedTab) {
+                NavigationView { LibraryView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("书库", systemImage: "books.vertical") }.tag(0)
+                NavigationView { ServersView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("在线书库", systemImage: "network") }.tag(1)
+                NavigationView { DownloadsView(manager: environment.downloads) }.navigationViewStyle(.stack).tabItem { Label("下载", systemImage: "arrow.down.circle") }.tag(2)
+                NavigationView { SettingsView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("设置", systemImage: "gearshape") }.tag(3)
             }.accentColor(Color(red: 0.19, green: 0.39, blue: 0.34))
         }
     }
