@@ -5,12 +5,14 @@ import SwiftUI
     let http = HTTPClient()
     let readium = ReadiumService()
     let importer: BookImportService
+    let sharedImports: SharedBookImportCoordinator
     let downloads: DownloadManager
     let opds: OPDSClient
     let sync: SyncCoordinator
     init() throws {
         store = try LibraryStore()
         importer = BookImportService(store: store, readium: readium)
+        sharedImports = SharedBookImportCoordinator(importer: importer)
         downloads = DownloadManager(http: http, importer: importer)
         opds = OPDSClient(http: http)
         sync = SyncCoordinator(store: store, http: http)

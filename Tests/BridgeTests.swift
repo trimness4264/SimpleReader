@@ -168,4 +168,61 @@ import ReadiumNavigator
         XCTAssertEqual(store.books.count, 1)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.fileURL("Staging").path).count, 0)
     }
+
+    func testSharedImportRecoversInboxWithoutOpenURLEvent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true)
+        let inbox = root.appendingPathComponent("Documents/Inbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+        let source = inbox.appendingPathComponent("中文 分享.EPUB")
+        try FileManager.default.copyItem(at: Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/sample.epub"), to: source)
+        let imports = SharedBookImportCoordinator(importer: BookImportService(store: store, readium: ReadiumService()), inbox: inbox)
+        let tasks = imports.recoverInbox()
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(imports.pendingCount, 1)
+        XCTAssertNil(imports.receive(source), "A simultaneous openURL callback must not import twice")
+        for task in tasks { await task.value }
+        XCTAssertEqual(store.books.count, 1)
+        XCTAssertEqual(store.books.first?.originalFilename, "中文 分享.EPUB")
+        let book = try XCTUnwrap(store.books.first)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(book.filePath).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertNil(imports.receive(source), "A delayed callback for the consumed Inbox copy must be ignored")
+        XCTAssertEqual(imports.pendingCount, 0)
+        XCTAssertNotNil(imports.message)
+        XCTAssertNil(imports.error)
+        // Files can reuse an Inbox filename for a subsequent share in this session.
+        try FileManager.default.copyItem(at: Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/sample.epub"), to: source)
+        let repeated = imports.recoverInbox()
+        XCTAssertEqual(repeated.count, 1)
+        for task in repeated { await task.value }
+        XCTAssertEqual(store.books.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertNil(imports.error)
+    }
+
+    func testSharedImportPreservesExternalFilesAndFailedInboxCopy() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true)
+        let inbox = root.appendingPathComponent("Inbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+        let imports = SharedBookImportCoordinator(importer: BookImportService(store: store, readium: ReadiumService()), inbox: inbox)
+        let external = root.appendingPathComponent("shared.epub")
+        try FileManager.default.copyItem(at: Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/sample.epub"), to: external)
+        await imports.receive(external)?.value
+        await imports.receive(external)?.value
+        XCTAssertEqual(store.books.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: external.path))
+        let invalid = inbox.appendingPathComponent("broken.epub")
+        try Data("invalid EPUB".utf8).write(to: invalid)
+        for task in imports.recoverInbox() { await task.value }
+        XCTAssertNotNil(imports.error)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: invalid.path))
+        XCTAssertTrue(imports.recoverInbox().isEmpty, "Do not repeat the same failure on every foreground transition")
+        XCTAssertEqual(store.books.count, 1)
+        XCTAssertEqual(imports.pendingCount, 0)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: store.fileURL("Staging").path).isEmpty)
+    }
 }
