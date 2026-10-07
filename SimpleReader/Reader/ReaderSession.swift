@@ -21,6 +21,7 @@ struct SyncPrompt: Identifiable {
     @Published var ready = false
     @Published var error: String?
     @Published var bridgeWarning: String?
+    @Published private(set) var syncMessage: String?
     @Published var progression: Double = 0
     @Published var contents: [ContentsItem] = []
     @Published private(set) var currentContentsID: UUID?
@@ -42,10 +43,15 @@ struct SyncPrompt: Identifiable {
     private var closed = false
     private var userHasMoved = false
     private var persistenceError: Error?
+    private var offeredApproximateFingerprint: String?
+    private var displaysTwoPages = false
 
     init(bookID: UUID, store: LibraryStore, readium: ReadiumService, sync: SyncCoordinator) {
         self.bookID = bookID; self.store = store; self.readium = readium; self.sync = sync
         super.init()
+        container.onLayout = { [weak self] size, idiom in
+            self?.updatePageLayout(size: size, idiom: idiom)
+        }
         current = store.book(bookID)?.position; progression = current?.progression ?? 0
     }
     deinit { if let token = pageObserver { NotificationCenter.default.removeObserver(token) }; saving?.cancel() }
@@ -151,7 +157,9 @@ struct SyncPrompt: Identifiable {
             case .pdf:
                 guard let document = PDFDocument(url: store.fileURL(book.filePath)), document.pageCount > 0 else { throw AppFailure("无法打开 PDF") }
                 let view = PDFView(frame: container.view.bounds); view.document = document; view.autoScales = true
-                view.displayMode = .singlePageContinuous; view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                view.displayMode = displaysTwoPages ? .twoUpContinuous : .singlePageContinuous
+                view.displaysAsBook = false
+                view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 container.view.addSubview(view); pdf = view
                 if let page = book.position?.pdfPage, let target = document.page(at: min(max(page,0),document.pageCount-1)) { view.go(to: target) }
                 if let outline = document.outlineRoot {
@@ -187,8 +195,14 @@ struct SyncPrompt: Identifiable {
                 try Task.checkCancellation()
                 if let location = navigator.currentLocation {
                     let locator = adjusted(location)
-                    let pointer = try? await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine)
-                    guard let pointer = pointer else { try await Task.sleep(nanoseconds: 100_000_000); continue }
+                    let pointer: String?
+                    do {
+                        pointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine.isEmpty ? nil : originalSpine)
+                    } catch {
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                        continue
+                    }
+                    // Text, media elements, and empty chapter starts all have an XPointer.
                     position = ReadingPosition(progression: locator.locations.totalProgression ?? 0, locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: current?.updatedAt ?? Date())
                     break
                 }
@@ -206,7 +220,19 @@ struct SyncPrompt: Identifiable {
     }
     private func preferences() -> EPUBPreferences {
         let settings = store.settings.reader
-        return EPUBPreferences(columnCount: .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, theme: settings.theme == "dark" ? .dark : settings.theme == "sepia" ? .sepia : .light)
+        return EPUBPreferences(columnCount: displaysTwoPages ? .two : .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, spread: displaysTwoPages ? .always : .never, theme: settings.theme == "dark" ? .dark : settings.theme == "sepia" ? .sepia : .light)
+    }
+    private func updatePageLayout(size: CGSize, idiom: UIUserInterfaceIdiom) {
+        let twoPages = ReaderPageLayout.displaysTwoPages(size: size, idiom: idiom)
+        guard displaysTwoPages != twoPages else { return }
+        displaysTwoPages = twoPages
+        epub?.submitPreferences(preferences())
+        if let pdf = pdf {
+            let page = pdf.currentPage
+            pdf.displayMode = twoPages ? .twoUpContinuous : .singlePageContinuous
+            pdf.autoScales = true
+            if let page = page { pdf.go(to: page) }
+        }
     }
     private func adjusted(_ locator: Locator) -> Locator {
         guard let progression = locator.locations.progression,
@@ -266,7 +292,7 @@ struct SyncPrompt: Identifiable {
     func turn(forward: Bool) async {
         if let epub = epub { if forward { await epub.goForward() } else { await epub.goBackward() } }
         else if let pdf = pdf, let doc = pdf.document, let page = pdf.currentPage {
-            let index = doc.index(for: page) + (forward ? 1 : -1)
+            let index = ReaderPageLayout.nextPDFPage(current: doc.index(for: page), forward: forward, twoPages: displaysTwoPages)
             if let target = doc.page(at: index) { pdf.go(to: target) }
         }
     }
@@ -274,9 +300,10 @@ struct SyncPrompt: Identifiable {
         if let link = item.link { await epub?.go(to: link) }
         if let page = item.pdfPage, let target = pdf?.document?.page(at: page) { pdf?.go(to: target) }
     }
-    func synchronize(preferLocal: Bool = false, flushFirst: Bool = true) async {
+    func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false) async {
         guard ready, !busySync, prompt == nil else { return }
         busySync = true; defer { busySync = false }
+        syncMessage = nil
         do {
             // Save the latest page before the coordinator takes a snapshot.
             if flushFirst { await flush() }
@@ -284,11 +311,17 @@ struct SyncPrompt: Identifiable {
             switch try await sync.synchronize(bookID, preferLocal: preferLocal) {
             case .idle: break
             case .conflict(let remote): prompt = SyncPrompt(kind: .conflict, remote: remote)
-            case .remote(let remote): await receive(remote)
+            case .remote(let remote):
+                if !userInitiated && remote.fingerprint == offeredApproximateFingerprint {
+                    syncMessage = "远端位置无法精确解析，已保留本地进度"
+                } else {
+                    await receive(remote)
+                }
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { syncMessage = "同步失败：\(error.localizedDescription)" }
     }
     func receive(_ remote: RemoteProgress, approximate: Bool = false) async {
+        syncMessage = nil
         suppressChanges = true; saving?.cancel(); captureGeneration += 1
         defer { suppressChanges = false }
         let previous = current
@@ -320,9 +353,27 @@ struct SyncPrompt: Identifiable {
         } catch {
             // A failed conversion may have opened a different chapter. Restore before offering fallback.
             if let json = previous?.locatorJSON, let locator = try? Locator(jsonString: json) { await epub?.go(to: locator) }
-            if epub != nil && !approximate { prompt = SyncPrompt(kind: .approximate, remote: remote) }
-            else { self.error = error.localizedDescription }
+            syncMessage = "同步失败：\(error.localizedDescription)"
+            if epub != nil && !approximate {
+                offeredApproximateFingerprint = remote.fingerprint
+                prompt = SyncPrompt(kind: .approximate, remote: remote)
+            }
         }
+    }
+}
+
+enum ReaderPageLayout {
+    static func displaysTwoPages(size: CGSize, idiom: UIUserInterfaceIdiom) -> Bool {
+        // Use the reader's viewport, so narrow Split View and Stage Manager windows
+        // stay readable even when the physical iPad is in landscape orientation.
+        idiom == .pad && size.width >= 700 && size.width > size.height && size.height > 0
+    }
+    static func nextPDFPage(current: Int, forward: Bool, twoPages: Bool) -> Int {
+        // PDF displaysAsBook is false: spreads begin with zero-based pages 0, 2, 4.
+        // Use that pair's start even when currentPage points to its right page.
+        let start = twoPages ? current / 2 * 2 : current
+        let step = twoPages ? 2 : 1
+        return start + (forward ? step : -step)
     }
 }
 
@@ -362,6 +413,12 @@ private enum ReaderFonts {
 
 @MainActor final class ReaderContainerController: UIViewController {
     private var appeared = false
+    var onLayout: ((CGSize, UIUserInterfaceIdiom) -> Void)?
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        onLayout?(view.bounds.size, traitCollection.userInterfaceIdiom)
+    }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)

@@ -27,7 +27,7 @@ struct ReaderView: View {
                 HStack {
                     Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一页")
                     Spacer()
-                    VStack(spacing: 3) { Text("\(Int(session.progression*100))%").font(.caption.monospacedDigit()); Text(sync.status).font(.caption2).foregroundColor(.secondary).lineLimit(1) }
+                    VStack(spacing: 3) { Text("\(Int(session.progression*100))%").font(.caption.monospacedDigit()); Text(session.syncMessage ?? sync.status).font(.caption2).foregroundColor(.secondary).lineLimit(1) }
                     Spacer()
                     Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下一页")
                 }.padding(.horizontal, 24).padding(.vertical, 10).background(Color(UIColor.secondarySystemBackground))
@@ -38,7 +38,7 @@ struct ReaderView: View {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button { showContents = true } label: { Image(systemName: "list.bullet") }.accessibilityLabel("目录").disabled(!session.ready)
                     if store.book(session.bookID)?.format == .epub { Button { showPreferences = true } label: { Image(systemName: "textformat.size") }.accessibilityLabel("阅读设置") }
-                    Button { Task { await session.synchronize() } } label: { Image(systemName: "arrow.triangle.2.circlepath") }.accessibilityLabel("同步进度")
+                    Button { Task { await session.synchronize(userInitiated: true) } } label: { Image(systemName: "arrow.triangle.2.circlepath") }.accessibilityLabel("同步进度")
                 }
             }
         }.navigationViewStyle(.stack)
