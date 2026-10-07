@@ -26,7 +26,7 @@ import ReadiumNavigator
         let hrefs = spine ?? navigator.publication.readingOrder.map(\.href)
         guard let index = hrefs.firstIndex(where: { normalize($0) == href }) else { throw AppFailure("当前章节不在 EPUB 阅读顺序中") }
         let value = try await navigator.evaluateJavaScript("\(try source)\nwindow.SimpleReaderBridge.capture(\(index), \(hrefs.count == 1 ? "true" : "false"));").get()
-        guard let pointer = value as? String else { throw AppFailure("无法获取 EPUB 正文位置") }
+        guard let pointer = value as? String else { throw AppFailure("无法获取 EPUB 阅读位置") }
         return pointer
     }
     static func locator(pointer: String, navigator: EPUBNavigatorViewController, spine: [String]? = nil) async throws -> Locator {
@@ -45,6 +45,11 @@ import ReadiumNavigator
                 var json: [String: Any] = ["href": link.href, "type": link.mediaType?.string ?? "application/xhtml+xml", "locations": ["cssSelector": selector]]
                 if let highlight = result["highlight"] as? String, !highlight.isEmpty {
                     json["text"] = ["highlight": highlight, "before": result["before"] as? String ?? "", "after": result["after"] as? String ?? ""]
+                } else {
+                    // Readium 3.8 dispatches selector navigation only when highlight
+                    // is non-nil. An empty quote takes its JS element-selector path,
+                    // allowing images/SVG/body to navigate without fabricated text.
+                    json["text"] = ["highlight": ""]
                 }
                 guard let locator = try Locator(json: json) else { throw AppFailure("无法生成 Readium 定位") }
                 return locator

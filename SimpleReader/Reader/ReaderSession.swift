@@ -21,6 +21,7 @@ struct SyncPrompt: Identifiable {
     @Published var ready = false
     @Published var error: String?
     @Published var bridgeWarning: String?
+    @Published private(set) var syncMessage: String?
     @Published var progression: Double = 0
     @Published var contents: [ContentsItem] = []
     @Published private(set) var currentContentsID: UUID?
@@ -42,6 +43,7 @@ struct SyncPrompt: Identifiable {
     private var closed = false
     private var userHasMoved = false
     private var persistenceError: Error?
+    private var offeredApproximateFingerprint: String?
 
     init(bookID: UUID, store: LibraryStore, readium: ReadiumService, sync: SyncCoordinator) {
         self.bookID = bookID; self.store = store; self.readium = readium; self.sync = sync
@@ -187,8 +189,14 @@ struct SyncPrompt: Identifiable {
                 try Task.checkCancellation()
                 if let location = navigator.currentLocation {
                     let locator = adjusted(location)
-                    let pointer = try? await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine)
-                    guard let pointer = pointer else { try await Task.sleep(nanoseconds: 100_000_000); continue }
+                    let pointer: String?
+                    do {
+                        pointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine.isEmpty ? nil : originalSpine)
+                    } catch {
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                        continue
+                    }
+                    // Text, media elements, and empty chapter starts all have an XPointer.
                     position = ReadingPosition(progression: locator.locations.totalProgression ?? 0, locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: current?.updatedAt ?? Date())
                     break
                 }
@@ -274,9 +282,10 @@ struct SyncPrompt: Identifiable {
         if let link = item.link { await epub?.go(to: link) }
         if let page = item.pdfPage, let target = pdf?.document?.page(at: page) { pdf?.go(to: target) }
     }
-    func synchronize(preferLocal: Bool = false, flushFirst: Bool = true) async {
+    func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false) async {
         guard ready, !busySync, prompt == nil else { return }
         busySync = true; defer { busySync = false }
+        syncMessage = nil
         do {
             // Save the latest page before the coordinator takes a snapshot.
             if flushFirst { await flush() }
@@ -284,11 +293,17 @@ struct SyncPrompt: Identifiable {
             switch try await sync.synchronize(bookID, preferLocal: preferLocal) {
             case .idle: break
             case .conflict(let remote): prompt = SyncPrompt(kind: .conflict, remote: remote)
-            case .remote(let remote): await receive(remote)
+            case .remote(let remote):
+                if !userInitiated && remote.fingerprint == offeredApproximateFingerprint {
+                    syncMessage = "远端位置无法精确解析，已保留本地进度"
+                } else {
+                    await receive(remote)
+                }
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { syncMessage = "同步失败：\(error.localizedDescription)" }
     }
     func receive(_ remote: RemoteProgress, approximate: Bool = false) async {
+        syncMessage = nil
         suppressChanges = true; saving?.cancel(); captureGeneration += 1
         defer { suppressChanges = false }
         let previous = current
@@ -320,8 +335,11 @@ struct SyncPrompt: Identifiable {
         } catch {
             // A failed conversion may have opened a different chapter. Restore before offering fallback.
             if let json = previous?.locatorJSON, let locator = try? Locator(jsonString: json) { await epub?.go(to: locator) }
-            if epub != nil && !approximate { prompt = SyncPrompt(kind: .approximate, remote: remote) }
-            else { self.error = error.localizedDescription }
+            syncMessage = "同步失败：\(error.localizedDescription)"
+            if epub != nil && !approximate {
+                offeredApproximateFingerprint = remote.fingerprint
+                prompt = SyncPrompt(kind: .approximate, remote: remote)
+            }
         }
     }
 }
