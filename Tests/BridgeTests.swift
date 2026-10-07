@@ -166,8 +166,16 @@ private final class ReaderSyncStub: ProgressSyncClient {
                 XCTAssertTrue(failures.isEmpty, "Readium \(columns), font \(fontSize): " + failures.joined(separator: "; "))
             }
         }
+        // Restoring the right-hand picture in a two-page spread makes the
+        // whole spread visible. Capture records its first visible picture,
+        // while resolving the requested pointer still addresses the second.
+        let second = "/body/DocFragment[1]/body/div[1]/img"
+        let target = try await EPUBPositionBridge.locator(pointer: second, navigator: navigator)
+        let moved = await navigator.go(to: target)
+        XCTAssertTrue(moved)
         // The injected style lives in head and cannot change media DOM paths.
         let pointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: XCTUnwrap(navigator.currentLocation))
+        XCTAssertEqual(pointer, "/body/DocFragment[1]/body/img", "Two-page capture anchors the first visible media in reading order")
         let result = try await navigator.evaluateJavaScript("SimpleReaderBridge.resolve(\(try EPUBPositionBridge.quoted(pointer)))").get() as! [String: Any]
         XCTAssertEqual(result["highlight"] as? String, "")
         withExtendedLifetime(delegate) {}
@@ -412,11 +420,21 @@ private final class ReaderSyncStub: ProgressSyncClient {
         let sync = SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { client })
         let session = ReaderSession(bookID: book.id, store: store, readium: readium, sync: sync)
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
-        let window = UIWindow(windowScene: scene); window.rootViewController = session.container; window.makeKeyAndVisible()
+        // This regression checks exact page-by-page media restoration. Give it
+        // the same single-page viewport on iPhone and iPad; spread navigation
+        // intentionally advances two pages and captures the first visible one.
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(session.container); host.view.addSubview(session.container.view)
+        session.container.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        session.container.didMove(toParent: host)
         defer { window.isHidden = true }
         await session.load()
         XCTAssertTrue(session.ready)
         let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        let columns = try await navigator.evaluateJavaScript("Number(getComputedStyle(document.documentElement).columnCount)").get() as! Int
+        XCTAssertEqual(columns, 1, "Specific-image navigation requires the explicit single-page test viewport")
         let second = "/body/DocFragment[1]/body/div[1]/img"
         await session.turn(forward: true)
         try await Task.sleep(nanoseconds: 500_000_000)
