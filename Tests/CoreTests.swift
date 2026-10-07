@@ -1,7 +1,77 @@
 import XCTest
+import UIKit
+import ReadiumNavigator
 @testable import SimpleReader
 
 final class CoreTests: XCTestCase {
+    func testReaderPageLayoutUsesAvailableIPadViewport() {
+        XCTAssertTrue(ReaderPageLayout.displaysTwoPages(size: CGSize(width: 1024, height: 660), idiom: .pad))
+        XCTAssertTrue(ReaderPageLayout.displaysTwoPages(size: CGSize(width: 1194, height: 720), idiom: .pad))
+        XCTAssertFalse(ReaderPageLayout.displaysTwoPages(size: CGSize(width: 768, height: 924), idiom: .pad))
+        XCTAssertFalse(ReaderPageLayout.displaysTwoPages(size: CGSize(width: 507, height: 660), idiom: .pad))
+        XCTAssertFalse(ReaderPageLayout.displaysTwoPages(size: CGSize(width: 650, height: 500), idiom: .pad))
+        XCTAssertFalse(ReaderPageLayout.displaysTwoPages(size: CGSize(width: 844, height: 300), idiom: .phone))
+        XCTAssertFalse(ReaderPageLayout.displaysTwoPages(size: .zero, idiom: .pad))
+    }
+
+    func testPDFTurnsAdvanceWholeSpreadsFromEitherVisiblePage() {
+        XCTAssertEqual(ReaderPageLayout.nextPDFPage(current: 0, forward: true, twoPages: true), 2)
+        XCTAssertEqual(ReaderPageLayout.nextPDFPage(current: 1, forward: true, twoPages: true), 2)
+        XCTAssertEqual(ReaderPageLayout.nextPDFPage(current: 3, forward: false, twoPages: true), 0)
+        XCTAssertEqual(ReaderPageLayout.nextPDFPage(current: 4, forward: false, twoPages: true), 2)
+        XCTAssertEqual(ReaderPageLayout.nextPDFPage(current: 1, forward: true, twoPages: false), 2)
+        XCTAssertEqual(ReaderPageLayout.nextPDFPage(current: 1, forward: false, twoPages: false), 0)
+    }
+
+    @MainActor func testEPUBPageLayoutFollowsContainerResizeAndFontChanges() async throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("Requires an iPad simulator") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true)
+        let readium = ReadiumService()
+        let file = Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/sample.epub")
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: file)
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium, sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        host.addChild(session.container)
+        host.view.addSubview(session.container.view)
+        session.container.didMove(toParent: host)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        func resize(_ size: CGSize) {
+            session.container.view.frame = CGRect(origin: .zero, size: size)
+            session.container.view.setNeedsLayout()
+            session.container.view.layoutIfNeeded()
+        }
+        resize(CGSize(width: 1024, height: 660))
+        await session.load()
+        XCTAssertTrue(session.ready, session.error ?? "Reader did not become ready")
+        let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        XCTAssertEqual(navigator.settings.columnCount, .two)
+        XCTAssertEqual(navigator.settings.spread, .always)
+        let columns = try await navigator.evaluateJavaScript("getComputedStyle(document.documentElement).columnCount").get() as? String
+        XCTAssertEqual(columns, "2", "The actual EPUB WebKit viewport must render two columns")
+        var settings = store.settings
+        settings.reader.fontSize = 200
+        try store.saveSettings(settings)
+        session.updatePreferences()
+        XCTAssertEqual(navigator.settings.columnCount, .two, "Increasing text size must retain landscape's two pages")
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let enlargedColumns = try await navigator.evaluateJavaScript("getComputedStyle(document.documentElement).columnCount").get() as? String
+        XCTAssertEqual(enlargedColumns, "2", "The rendered spread must retain two columns at 200% text size")
+        resize(CGSize(width: 768, height: 924))
+        XCTAssertEqual(navigator.settings.columnCount, .one)
+        XCTAssertEqual(navigator.settings.spread, .never)
+        resize(CGSize(width: 1024, height: 660))
+        XCTAssertEqual(navigator.settings.columnCount, .two)
+        resize(CGSize(width: 507, height: 660))
+        XCTAssertEqual(navigator.settings.columnCount, .one, "A narrow iPad window must return to one page")
+        await session.close()
+    }
+
     func testKOReaderHashUsesSampledWindowsAndOriginalFilename() throws {
         let data = Data((0..<20000).map { UInt8(($0*7)%251) })
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
