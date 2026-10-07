@@ -19,6 +19,13 @@ private final class ReaderSyncStub: ProgressSyncClient {
     }
 }
 
+@MainActor private final class MediaLayoutDelegate: EPUBNavigatorDelegate {
+    func navigator(_ navigator: Navigator, presentError error: NavigatorError) {}
+    func navigator(_ navigator: EPUBNavigatorViewController, setupUserScripts controller: WKUserContentController) {
+        EPUBPositionBridge.installMediaLayout(in: controller)
+    }
+}
+
 @MainActor final class BridgeTests: XCTestCase, WKNavigationDelegate {
     private var loaded: XCTestExpectation?
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded?.fulfill() }
@@ -43,6 +50,127 @@ private final class ReaderSyncStub: ProgressSyncClient {
         let pre = try await view.evaluateJavaScript("SimpleReaderBridge.fromPoint(document.querySelector('pre').firstChild, 5, 0, true)") as! String
         XCTAssertEqual(pre, "/body/DocFragment/body/pre/text().5")
         do { _ = try await view.evaluateJavaScript("SimpleReaderBridge.resolve('/body/DocFragment/body/p/text()[9].0')"); XCTFail("Invalid pointer must fail") } catch {}
+    }
+    func testPaginatedImagesRemainWholeAcrossFontSizesAndRotation() async throws {
+        let configuration = WKWebViewConfiguration()
+        EPUBPositionBridge.installMediaLayout(in: configuration.userContentController)
+        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 700), configuration: configuration)
+        view.navigationDelegate = self
+        loaded = expectation(description: "Paginated images loaded")
+        // Intrinsic portrait/wide images, font-relative publisher sizing, and
+        // inline SVG, all following text so they must move to the next column.
+        view.loadHTMLString("""
+            <html><head><meta name="viewport" content="width=device-width,initial-scale=1"/>
+            <style>
+              html { column-count:1; column-width:350px; column-gap:40px; column-fill:auto; height:100vh; width:100%; }
+              body { margin:0; padding:20px; font-size:16px; line-height:1.5; }
+              p { margin:0; }
+              img, svg { width:40em; height:60em; }
+            </style></head><body>
+            <p style="height:150px">Before pictures</p>
+            <img id="portrait" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='1200'%3E%3Crect width='600' height='1200' fill='red'/%3E%3C/svg%3E"/>
+            <p>Between pictures</p>
+            <figure style="margin:0"><img id="wide" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='800'%3E%3Crect width='1600' height='800' fill='blue'/%3E%3C/svg%3E"/><figcaption>Caption</figcaption></figure>
+            <svg id="vector" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 1200" width="600" height="1200"><rect width="600" height="1200" fill="green"/></svg>
+            </body></html>
+            """, baseURL: nil)
+        await fulfillment(of: [loaded!], timeout: 10)
+        _ = try await view.evaluateJavaScript(EPUBPositionBridge.source)
+        for (width, height, columns) in [(390, 700, 1), (1024, 650, 2), (768, 1024, 1)] {
+            view.frame.size = CGSize(width: width, height: height)
+            view.layoutIfNeeded()
+            try await Task.sleep(nanoseconds: 150_000_000)
+            for size in [80, 100, 150, 200] {
+                let failures = try await view.evaluateJavaScript("""
+                    (() => {
+                      document.documentElement.style.columnCount = '\(columns)';
+                      document.documentElement.style.columnWidth = ((innerWidth - (\(columns) - 1) * 40) / \(columns)) + 'px';
+                      document.body.style.fontSize = '\(Double(size) * 0.16)px';
+                      SimpleReaderMediaLayout.refresh();
+                      const failures = [];
+                      const root = document.documentElement, body = document.body;
+                      const usableWidth = (innerWidth - (\(columns) - 1) * 40) / \(columns) - 40;
+                      for (const id of ['portrait','wide','vector']) {
+                        const image = document.getElementById(id), rects = Array.from(image.getClientRects());
+                        if (rects.length !== 1) failures.push(id + ': fragmented into ' + rects.length);
+                        const r = rects[0];
+                        if (!r || r.height <= 0 || r.width <= 0) { failures.push(id + ': empty'); continue; }
+                        if (r.height > innerHeight - 40 || r.top < -1 || r.bottom > innerHeight + 1)
+                          failures.push(id + ': crosses page vertically ' + JSON.stringify(r.toJSON()));
+                        if (r.width > usableWidth + 1) failures.push(id + ': exceeds column width ' + r.width);
+                        const expected = id === 'wide' ? 2 : 0.5;
+                        if (Math.abs(r.width / r.height - expected) > 0.02) failures.push(id + ': aspect ratio changed');
+                        const xp = SimpleReaderBridge.fromPoint(image,0,0,true);
+                        if (document.querySelector(SimpleReaderBridge.resolve(xp).cssSelector) !== image)
+                          failures.push(id + ': position changed');
+                      }
+                      return failures;
+                    })()
+                    """) as! [String]
+                XCTAssertTrue(failures.isEmpty, "\(width)x\(height), \(columns) columns, \(size)%: " + failures.joined(separator: "; "))
+            }
+        }
+        _ = try await view.evaluateJavaScript("document.documentElement.style.columnCount = 'auto'; document.documentElement.style.columnWidth = 'auto'; SimpleReaderMediaLayout.refresh()")
+        let fixed = try await view.evaluateJavaScript("document.documentElement.hasAttribute('data-simple-reader-paginated')") as! Bool
+        XCTAssertFalse(fixed, "Fixed layout and scrolling must retain publication image sizing")
+    }
+    func testReadiumMediaLayoutBeforePaginationAndAfterPreferencesChange() async throws {
+        let file = Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/image-only.epub")
+        let publication = try await ReadiumService().open(file)
+        let navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: nil,
+            config: .init(preferences: .init(columnCount: .one, fontSize: 0.8, publisherStyles: false)))
+        let delegate = MediaLayoutDelegate()
+        navigator.delegate = delegate
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
+        let window = UIWindow(windowScene: scene)
+        // A container supplies real iPad-sized WebView bounds even when this
+        // regression runs on an iPhone simulator. Readium requires >= 960px
+        // before applying the requested two-column preference.
+        let host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(navigator); host.view.addSubview(navigator.view)
+        navigator.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        navigator.didMove(toParent: host)
+        defer { window.isHidden = true }
+        var ready = false
+        for _ in 0..<100 {
+            if let value = try? await navigator.evaluateJavaScript("typeof SimpleReaderMediaLayout !== 'undefined' && document.documentElement.hasAttribute('data-simple-reader-paginated') && !!document.getElementById('first')?.complete").get(), value as? Bool == true {
+                ready = true; break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(ready, "Document-start media hook must be installed in actual Readium")
+        for columns in [ColumnCount.one, .two] {
+            navigator.view.frame.size = columns == .one ? CGSize(width: 390, height: 700) : CGSize(width: 1024, height: 650)
+            navigator.view.layoutIfNeeded()
+            for fontSize in [0.8, 2.0] {
+                navigator.submitPreferences(.init(columnCount: columns, fontSize: fontSize, publisherStyles: false))
+                try await Task.sleep(nanoseconds: 400_000_000)
+                let failures = try await navigator.evaluateJavaScript("""
+                    (() => {
+                      const failures = [];
+                      if (!document.documentElement.hasAttribute('data-simple-reader-paginated')) failures.push('CSS columns not detected');
+                      if (Number(getComputedStyle(document.documentElement).columnCount) !== \(columns == .one ? 1 : 2)) failures.push('Requested column count not applied');
+                      for (const id of ['first','second','third']) {
+                        const image = document.getElementById(id), rects = Array.from(image.getClientRects());
+                        if (rects.length !== 1) failures.push(id + ': fragmented ' + rects.length);
+                        const r = rects[0];
+                        if (!r || r.width <= 0 || r.height <= 0) { failures.push(id + ': empty'); continue; }
+                        if (r.top < -1 || r.bottom > innerHeight + 1) failures.push(id + ': exceeds actual page ' + JSON.stringify(r.toJSON()));
+                        const expected = id === 'third' ? 0.75 : image.naturalWidth / image.naturalHeight;
+                        if (Math.abs(r.width / r.height - expected) > 0.02) failures.push(id + ': aspect ratio changed');
+                      }
+                      return failures;
+                    })()
+                    """).get() as! [String]
+                XCTAssertTrue(failures.isEmpty, "Readium \(columns), font \(fontSize): " + failures.joined(separator: "; "))
+            }
+        }
+        // The injected style lives in head and cannot change media DOM paths.
+        let pointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: XCTUnwrap(navigator.currentLocation))
+        let result = try await navigator.evaluateJavaScript("SimpleReaderBridge.resolve(\(try EPUBPositionBridge.quoted(pointer)))").get() as! [String: Any]
+        XCTAssertEqual(result["highlight"] as? String, "")
+        withExtendedLifetime(delegate) {}
     }
     func testReadiumOpensFixtureAndMapsChapterIndex() async throws {
         let file = Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/sample.epub")
