@@ -86,31 +86,42 @@
     } else if (elementOffset) {
       const walker = document.createTreeWalker(e,NodeFilter.SHOW_TEXT); let remaining = Number(elementOffset[1]);
       while ((node = walker.nextNode())) { const length = collapsedOffset(node,node.length); if (remaining <= length) { raw = rawOffset(node,remaining); break; } remaining -= length; }
-      if (!node) throw Error('Text offset not found');
+      // CREngine can express an element start as img.0/body.0 without text.
+      if (!node && Number(elementOffset[1]) !== 0) throw Error('Text offset not found');
     }
     const quote = node ? node.data.slice(raw,raw+64) : '';
     return {spine, textNodeIndex:node ? Array.from(node.parentElement.childNodes).indexOf(node) : null, textOffset:raw, cssSelector:selector(node ? node.parentElement : e), highlight:quote, before:node ? node.data.slice(Math.max(0,raw-32),raw) : '', after:node ? node.data.slice(raw+64,raw+96) : ''};
   }
   function capture(spine, single) {
-    const walker = document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{
+    if (!document.body || document.readyState === 'loading') throw Error('Chapter is still loading');
+    const visible = v => v.width > 0 && v.height > 0 && v.right > 0 && v.left < innerWidth && v.bottom > 0 && v.top < innerHeight;
+    // Keep text and media in document order, so a picture before a caption
+    // anchors to the picture. Ignore layout containers and injected content.
+    const walker = document.createTreeWalker(document.body,NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,{
       acceptNode(n) {
+        for (let e = n.nodeType === Node.ELEMENT_NODE ? n : n.parentElement; e; e = e.parentElement) if (inert(e)) return NodeFilter.FILTER_REJECT;
+        if (n.nodeType === Node.ELEMENT_NODE) {
+          if (!n.matches('img,svg,object,video,canvas')) return NodeFilter.FILTER_SKIP;
+          return Array.from(n.getClientRects()).some(visible) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
         if (!n.data.trim()) return NodeFilter.FILTER_REJECT;
-        for (let e = n.parentElement; e; e = e.parentElement) if (inert(e)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
     let node;
     while ((node = walker.nextNode())) {
+      if (node.nodeType === Node.ELEMENT_NODE) return fromPoint(node,0,spine,single);
       const r = document.createRange(); r.selectNodeContents(node);
-      if (!Array.from(r.getClientRects()).some(v => v.width > 0 && v.height > 0 && v.right > 0 && v.left < innerWidth && v.bottom > 0 && v.top < innerHeight)) continue;
+      if (!Array.from(r.getClientRects()).some(visible)) continue;
       // Binary search is unsafe for paginated ranges. Test each character of the visible text node.
       for (let offset = 0; offset < node.length; offset++) {
         r.setStart(node,offset); r.setEnd(node,offset+1);
         const v = r.getBoundingClientRect();
-        if (v.width > 0 && v.height > 0 && v.right > 0 && v.left < innerWidth && v.bottom > 0 && v.top < innerHeight) return fromPoint(node,offset,spine,single);
+        if (visible(v)) return fromPoint(node,offset,spine,single);
       }
     }
-    throw Error('No visible正文 position; upload deferred');
+    // Empty pages and CSS background covers still have a valid chapter anchor.
+    return path(document.body,spine,single);
   }
   window.SimpleReaderBridge = {capture,resolve,fromPoint};
 })();

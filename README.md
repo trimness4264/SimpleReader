@@ -24,6 +24,7 @@ SwiftUI + Core Data + Readium Swift **3.8.0** + PDFKit。
 - 可重排 EPUB 正文默认使用霞鹜文楷（LXGW WenKai）显示中文等 CJK 字符，西文使用 Source Serif 4 Text，包含常规、粗体、斜体和粗斜体。字体随应用离线提供；缺失字形使用系统衬线字体回退。PDF 和固定版式 EPUB 保留原有排版。
 - 打开目录会自动滚动到蓝色“当前位置”行，位于正在阅读的章节下方；EPUB 显示阅读百分比，PDF 显示当前页 / 总页数。点击该行可关闭目录并继续阅读。
 - 同步冲突会提供本机/远端选择。解析失败可选择按百分比近似跳转；不会将百分比或 Readium Locator 直接冒充 XPointer 上传。
+- 封面、空白页和纯图片 EPUB 可正常打开和同步：图片 / SVG 使用元素 XPointer，同一章节内的多张图片分别定位；空白页或仅有 CSS 背景的页面使用章节起点。同步失败显示在底部状态栏；同一远端位置的近似跳转询问在本次阅读中只自动提示一次，可通过手动同步重试。
 
 ## 构建与测试
 
@@ -71,7 +72,7 @@ python3 Scripts/fixture_server.py
 
 - `BookImportService` 是 Files 和下载共用的入库入口；复制到 staging、验证、提取元数据和封面，再移动文件并保存 Core Data。相同 SHA-256 去重。
 - `Application Support/SimpleReader/Books` 存图书、`Covers` 存封面、`Library.sqlite` 存元数据和进度；相对路径可以适应容器迁移。启动时清理 staging 和未入库的孤立文件。
-- 阅读器持久化 Readium Locator 或 PDF 的零基页码；`EPUBPositionBridge` 转换 DOM 正文位置与 XPointer，`SyncCoordinator` 处理网络和冲突。
+- 阅读器持久化 Readium Locator 或 PDF 的零基页码；`EPUBPositionBridge` 转换 DOM 文字 / 图片 / 章节起点与 XPointer，`SyncCoordinator` 处理网络和冲突。
 - 原始 OPF spine 与 Readium readingOrder 分开保存，避免非线性章节导致 DocFragment 编号漂移。远端定位到不支持的非线性章节时，显示近似跳转选项。
 - 本地 UUID、完整 SHA-256、KOReader sampled MD5、原始文件名 MD5 各司其职。
 - 密码只在 Keychain 中存储；服务器配置和稳定设备 ID 在 Core Data 中持久化。公网要求 HTTPS，不禁用证书验证；局域网可使用 HTTP。
@@ -80,7 +81,7 @@ python3 Scripts/fixture_server.py
 ## 首版限制
 
 无 DRM、批注、全文搜索、TTS、书籍文件云同步、后台下载或 App Store 分发流程。
-EPUB 同步以正文段落为目标；不同排版引擎不保证字符级一致。旧 KOReader DOM 版本、损坏 XHTML、固定版式/无可见正文的 EPUB 可能无法转换，失败时保留本地位置并暂停上传。
+EPUB 同步支持正文与图片元素；不同排版引擎不保证字符级一致，也不保存单张大图内部的滚动偏移。空白页和 CSS 背景页面只能定位到章节起点。旧 KOReader DOM 版本、损坏 XHTML 或部分固定版式 EPUB 可能无法转换，失败时保留本地位置并暂停上传。
 后台同步是尽力完成；离线或进程终止后，待同步状态会保存，在下次打开图书时重新检查远端再上传。
 
 ## 许可
