@@ -2,6 +2,7 @@ import SwiftUI
 import PDFKit
 import ReadiumShared
 import ReadiumNavigator
+import WebKit
 
 struct ContentsItem: Identifiable {
     let id = UUID()
@@ -51,6 +52,9 @@ struct SyncPrompt: Identifiable {
         current = store.book(bookID)?.position; progression = current?.progression ?? 0
     }
     deinit { if let token = pageObserver { NotificationCenter.default.removeObserver(token) }; saving?.cancel() }
+    func navigator(_ navigator: EPUBNavigatorViewController, setupUserScripts controller: WKUserContentController) {
+        EPUBPositionBridge.installMediaLayout(in: controller)
+    }
     var title: String { store.book(bookID)?.title ?? "阅读" }
     var progressLabel: String {
         if let document = pdf?.document, let page = pdf?.currentPage {
