@@ -112,6 +112,26 @@ final class CoreTests: XCTestCase {
         }
         task.cancel()
     }
+    func testHTTPPolicyAcceptsLocalRangesAndRejectsAdjacentPublicAddresses() throws {
+        let localHosts = [
+            "localhost", "calibre.local", "calibre", "10.0.0.1", "127.0.0.1",
+            "192.168.0.1", "172.16.0.1", "172.31.255.254", "169.254.0.1",
+            "[::1]", "[fc00::1]", "[fd00::1]", "[fe80::1]"
+        ]
+        let publicHosts = [
+            "example.com", "11.0.0.1", "126.0.0.1", "192.167.0.1",
+            "172.15.255.254", "172.32.0.1", "169.253.0.1", "[2001:db8::1]"
+        ]
+        for host in localHosts {
+            let url = try XCTUnwrap(URL(string: "http://\(host)"))
+            XCTAssertNoThrow(try NetworkPolicy.validate(url), host)
+        }
+        for host in publicHosts {
+            let url = try XCTUnwrap(URL(string: "http://\(host)"))
+            XCTAssertThrowsError(try NetworkPolicy.validate(url), host)
+        }
+    }
+
     func testKeychainRoundTripInSignedSimulator() throws {
         let key = "test-" + UUID().uuidString
         defer { KeychainService.delete(key) }

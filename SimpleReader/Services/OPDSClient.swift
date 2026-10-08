@@ -55,14 +55,28 @@ final class OPDSParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) { self.parser(parser, foundCharacters: String(decoding: CDATABlock, as: UTF8.self)) }
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         let text = (texts.popLast() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        stack.removeLast(); bases.removeLast()
-        let parent = stack.last
-        if elementName == "title", parent == "entry" { entry?.title = text }
-        if elementName == "title", parent == "feed" { catalog.title = text }
-        if elementName == "id", parent == "entry" { entry?.id = text }
-        if elementName == "name", parent == "author", entry != nil { let prefix = entry!.author.isEmpty ? "" : ", "; entry?.author += prefix + text }
-        if ["summary", "content"].contains(elementName), parent == "entry" { entry?.summary = text }
-        if elementName == "entry", let complete = entry { catalog.entries.append(complete); entry = nil }
+        stack.removeLast()
+        bases.removeLast()
+        switch (elementName, stack.last) {
+        case ("title", "entry"):
+            entry?.title = text
+        case ("title", "feed"):
+            catalog.title = text
+        case ("id", "entry"):
+            entry?.id = text
+        case ("name", "author"):
+            if var entry = entry {
+                entry.author += (entry.author.isEmpty ? "" : ", ") + text
+                self.entry = entry
+            }
+        case ("summary", "entry"), ("content", "entry"):
+            entry?.summary = text
+        case ("entry", _):
+            if let complete = entry { catalog.entries.append(complete) }
+            entry = nil
+        default:
+            break
+        }
         if !texts.isEmpty { texts[texts.count - 1] += text }
     }
 }
