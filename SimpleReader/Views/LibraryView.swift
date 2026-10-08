@@ -55,7 +55,7 @@ struct LibraryView: View {
                 if books.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "book.closed").font(.system(size: 48)).foregroundColor(.secondary)
-                        Text(recentOnly ? "还没有阅读记录" : "你的书库，从一本书开始").font(.title3)
+                        Text(recentOnly ? "还没有阅读记录" : "书库里还没有图书").font(.title3)
                         Text("导入 EPUB 或 PDF，也可以从在线书库下载。").foregroundColor(.secondary).multilineTextAlignment(.center)
                         Button("导入图书") { importing = true }.buttonStyle(.borderedProminent).disabled(busy)
                     }.frame(maxWidth: .infinity).padding(.vertical, 70)
