@@ -28,6 +28,8 @@ SwiftUI + Core Data + Readium Swift **3.8.0** + PDFKit。
 
 ## 构建与测试
 
+每次完成代码修改后，都要递增 `SimpleReader/Resources/Info.plist` 中的 `CFBundleVersion`（构建号）。需要发布新版本或调整版本时，再更新 `CFBundleShortVersionString`（版本号）。
+
 ```sh
 xcodebuild -project SimpleReader.xcodeproj -scheme SimpleReader \
   -destination 'generic/platform=iOS Simulator' \
@@ -77,6 +79,7 @@ python3 Scripts/fixture_server.py
 - 本地 UUID、完整 SHA-256、KOReader sampled MD5、原始文件名 MD5 各司其职。
 - 密码只在 Keychain 中存储；服务器配置和稳定设备 ID 在 Core Data 中持久化。公网要求 HTTPS，不禁用证书验证；局域网可使用 HTTP。
 - 同步使用已观察到的远端状态作为基线。有本地待上传位置和未确认的远端变化时，不自动覆盖。上传期间继续阅读的更新仍保留为待同步。
+- 同步请求等待期间发生翻页或目录跳转时，保留当前阅读位置，远端进度留待下次同步处理；即使 EPUB 的延迟保存尚未完成，也不会自动跳回远端页面。退到后台和退出阅读时只处理上传，不自动跳转或弹出同步位置选择。
 
 ## 首版限制
 

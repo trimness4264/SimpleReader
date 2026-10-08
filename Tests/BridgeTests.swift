@@ -8,8 +8,10 @@ private final class ReaderSyncStub: ProgressSyncClient {
     var remote: RemoteProgress?
     var failure: Error?
     var uploaded: [ReadingPosition] = []
+    var onGet: (@MainActor () async -> Void)?
     func get(document: String) async throws -> RemoteProgress? {
         if let failure = failure { throw failure }
+        await onGet?()
         return remote
     }
     func put(document: String, position: ReadingPosition, deviceID: String) async throws {
@@ -27,6 +29,9 @@ private final class ReaderSyncStub: ProgressSyncClient {
 }
 
 @MainActor final class BridgeTests: XCTestCase, WKNavigationDelegate {
+    private func fixture(_ name: String) -> URL {
+        Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/\(name)")
+    }
     private var loaded: XCTestExpectation?
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded?.fulfill() }
     func page(_ html: String) async -> WKWebView {
@@ -303,6 +308,78 @@ private final class ReaderSyncStub: ProgressSyncClient {
         XCTAssertGreaterThan(store.book(book.id)?.position?.progression ?? 0, 0, "Progress must advance within a small compressed chapter")
         XCTAssertTrue(store.book(book.id)!.pendingSync)
     }
+    func testSyncResponseDuringEPUBTurnDoesNotRestoreOldPage() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let client = ReaderSyncStub()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { client }))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
+        let window = UIWindow(windowScene: scene); window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        let initialLocator = try XCTUnwrap(navigator.currentLocation)
+        let initial = try XCTUnwrap(store.book(book.id)?.position)
+        client.remote = RemoteProgress(progress: initial.xpointer, percentage: initial.progression, timestamp: 10, device_id: "other")
+        var settings = store.settings; settings.sync.enabled = true; try store.saveSettings(settings)
+        var turned: Locator?
+        client.onGet = {
+            // Native swipe navigation bypasses ReaderSession.turn(). Wait for its
+            // location callback, then return the GET inside the save debounce.
+            _ = await navigator.goForward()
+            for _ in 0..<200 {
+                if navigator.currentLocation?.jsonString != initialLocator.jsonString { break }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            turned = navigator.currentLocation
+            XCTAssertNotEqual(turned?.jsonString, initialLocator.jsonString)
+            XCTAssertFalse(store.book(book.id)!.pendingSync)
+        }
+        await session.synchronize()
+        client.onGet = nil
+        let location = try XCTUnwrap(turned)
+        XCTAssertEqual(navigator.currentLocation?.jsonString, location.jsonString)
+        XCTAssertNil(session.prompt)
+        XCTAssertNil(store.book(book.id)?.remoteBaseline, "Deferred remote progress must not be acknowledged")
+        await session.flush()
+        XCTAssertTrue(store.book(book.id)!.pendingSync)
+        XCTAssertGreaterThan(store.book(book.id)?.position?.progression ?? 0, initial.progression)
+        XCTAssertTrue(client.uploaded.isEmpty)
+        // A later explicit sync still offers the normal local/remote conflict.
+        await session.synchronize(userInitiated: true)
+        XCTAssertEqual(session.prompt?.kind, .conflict)
+    }
+
+    func testBackgroundAndCloseDoNotApplyRemoteProgress() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let client = ReaderSyncStub()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { client }))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
+        let window = UIWindow(windowScene: scene); window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        let initial = store.book(book.id)?.position
+        client.remote = RemoteProgress(progress: "/body/DocFragment[2]/body/p", percentage: 0.8, timestamp: 10, device_id: "other")
+        var settings = store.settings; settings.sync.enabled = true; try store.saveSettings(settings)
+        // Backgrounding also invalidates an already outstanding foreground GET.
+        client.onGet = { await session.background() }
+        await session.synchronize()
+        client.onGet = nil
+        await session.background()
+        await session.close()
+        XCTAssertEqual(store.book(book.id)?.position, initial)
+        XCTAssertNil(store.book(book.id)?.remoteBaseline)
+        XCTAssertNil(session.prompt)
+        XCTAssertTrue(client.uploaded.isEmpty)
+    }
+
     func testEPUBLoadsAfterContainerAppearsWithoutCreatingPendingUpload() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
