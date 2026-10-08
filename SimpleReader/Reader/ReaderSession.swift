@@ -37,6 +37,8 @@ struct SyncPrompt: Identifiable {
     private var pageObserver: NSObjectProtocol?
     private var saving: Task<Void, Never>?
     private var captureGeneration = 0
+    // Invalidates remote navigation immediately, before debounced persistence.
+    private var navigationRevision = 0
     private var suppressChanges = false
     private var loading = false
     private var busySync = false
@@ -252,6 +254,7 @@ struct SyncPrompt: Identifiable {
         guard !suppressChanges, !closed else { return }
         if locator.jsonString == current?.locatorJSON { return }
         userHasMoved = true
+        navigationRevision += 1
         captureGeneration += 1
         let generation = captureGeneration
         saving?.cancel()
@@ -276,6 +279,7 @@ struct SyncPrompt: Identifiable {
         let index = document.index(for: page)
         if index == current?.pdfPage { return }
         userHasMoved = true
+        navigationRevision += 1
         saveChanged(ReadingPosition(progression: Double(index+1) / Double(document.pageCount), pdfPage: index, updatedAt: Date()))
     }
     private func saveChanged(_ position: ReadingPosition) {
@@ -292,8 +296,14 @@ struct SyncPrompt: Identifiable {
         else { pdfChanged() }
     }
     func close() async { await background(); closed = true }
-    func background() async { await flush(); await synchronize(flushFirst: false) }
+    func background() async {
+        navigationRevision += 1
+        await flush()
+        await synchronize(flushFirst: false, applyRemote: false)
+    }
     func turn(forward: Bool) async {
+        guard ready, !closed, !suppressChanges else { return }
+        navigationRevision += 1
         if let epub = epub { if forward { await epub.goForward() } else { await epub.goBackward() } }
         else if let pdf = pdf, let doc = pdf.document, let page = pdf.currentPage {
             let index = ReaderPageLayout.nextPDFPage(current: doc.index(for: page), forward: forward, twoPages: displaysTwoPages)
@@ -301,12 +311,15 @@ struct SyncPrompt: Identifiable {
         }
     }
     func go(_ item: ContentsItem) async {
+        guard ready, !closed, !suppressChanges else { return }
+        navigationRevision += 1
         if let link = item.link { await epub?.go(to: link) }
         if let page = item.pdfPage, let target = pdf?.document?.page(at: page) { pdf?.go(to: target) }
     }
-    func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false) async {
-        guard ready, !busySync, prompt == nil else { return }
+    func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false, applyRemote: Bool = true) async {
+        guard ready, !busySync, !suppressChanges, prompt == nil else { return }
         busySync = true; defer { busySync = false }
+        let revision = navigationRevision
         syncMessage = nil
         do {
             // Save the latest page before the coordinator takes a snapshot.
@@ -314,8 +327,19 @@ struct SyncPrompt: Identifiable {
             if let error = persistenceError { throw error }
             switch try await sync.synchronize(bookID, preferLocal: preferLocal) {
             case .idle: break
-            case .conflict(let remote): prompt = SyncPrompt(kind: .conflict, remote: remote)
+            case .conflict(let remote):
+                guard applyRemote, !closed, !Task.isCancelled, revision == navigationRevision else {
+                    syncMessage = "已保留当前阅读位置，请稍后同步"
+                    return
+                }
+                prompt = SyncPrompt(kind: .conflict, remote: remote)
             case .remote(let remote):
+                // A network response must not override a turn made while awaiting it,
+                // even if the 400 ms position capture has not reached the store yet.
+                guard applyRemote, !closed, !Task.isCancelled, revision == navigationRevision else {
+                    syncMessage = "已保留当前阅读位置，请稍后同步"
+                    return
+                }
                 if !userInitiated && remote.fingerprint == offeredApproximateFingerprint {
                     syncMessage = "远端位置无法精确解析，已保留本地进度"
                 } else {
@@ -325,6 +349,7 @@ struct SyncPrompt: Identifiable {
         } catch { syncMessage = "同步失败：\(error.localizedDescription)" }
     }
     func receive(_ remote: RemoteProgress, approximate: Bool = false) async {
+        guard ready, !closed, !suppressChanges else { return }
         syncMessage = nil
         suppressChanges = true; saving?.cancel(); captureGeneration += 1
         defer { suppressChanges = false }
