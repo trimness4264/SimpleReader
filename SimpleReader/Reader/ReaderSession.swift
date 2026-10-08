@@ -325,22 +325,19 @@ struct SyncPrompt: Identifiable {
             // Save the latest page before the coordinator takes a snapshot.
             if flushFirst { await flush() }
             if let error = persistenceError { throw error }
-            switch try await sync.synchronize(bookID, preferLocal: preferLocal) {
+            let outcome = try await sync.synchronize(bookID, preferLocal: preferLocal)
+            switch outcome {
             case .idle: break
-            case .conflict(let remote):
-                guard applyRemote, !closed, !Task.isCancelled, revision == navigationRevision else {
-                    syncMessage = "已保留当前阅读位置，请稍后同步"
-                    return
-                }
-                prompt = SyncPrompt(kind: .conflict, remote: remote)
-            case .remote(let remote):
+            case .conflict(let remote), .remote(let remote):
                 // A network response must not override a turn made while awaiting it,
                 // even if the 400 ms position capture has not reached the store yet.
                 guard applyRemote, !closed, !Task.isCancelled, revision == navigationRevision else {
                     syncMessage = "已保留当前阅读位置，请稍后同步"
                     return
                 }
-                if !userInitiated && remote.fingerprint == offeredApproximateFingerprint {
+                if case .conflict = outcome {
+                    prompt = SyncPrompt(kind: .conflict, remote: remote)
+                } else if !userInitiated && remote.fingerprint == offeredApproximateFingerprint {
                     syncMessage = "远端位置无法精确解析，已保留本地进度"
                 } else {
                     await receive(remote)

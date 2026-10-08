@@ -1,95 +1,34 @@
 # Simple Reader
 
-个人使用的原生 iPhone 和 iPad 阅读器，最低支持 iOS 15。
-SwiftUI + Core Data + Readium Swift **3.8.0** + PDFKit。
+Simple Reader 是一款适用于 iPhone 和 iPad 的原生 EPUB/PDF 阅读器，支持 iOS 15 及以上版本。
 
-## 在 Xcode 中运行
+应用使用 SwiftUI、Core Data、Readium Swift 3.8.0 和 PDFKit 构建。
 
-1. 打开 `SimpleReader.xcodeproj`，选择 `SimpleReader` scheme，等待 SPM 下载依赖。
-2. 选择 iPhone 或 iPad 模拟器后运行。首次解析依赖需要网络。
-3. 真机：在 Signing & Capabilities 中选择你的 Personal Team，必要时修改 Bundle Identifier，连接设备并启用开发者模式后运行。项目没有付费 entitlement，也不需要手动安装阅读引擎。
-4. Xcode 的免费签名需要定期重新安装。保持同一 Bundle Identifier，避免通过删除 App 的方式更新而丢失书库。
+## 功能
 
-项目使用 iOS 15 可用接口；本机实际运行检查见 `Docs/VALIDATION.md`。当前 Xcode 的 XCTest 框架要求较新的测试运行系统，应用部署目标仍为 iOS 15。
+- 阅读 EPUB 和 PDF，支持目录导航、EPUB 字号与主题调整，以及 PDF 缩放。
+- 从 Files 导入图书，也可以从其他应用直接用 Simple Reader 打开。
+- 连接 Calibre OPDS 书库，浏览、搜索并下载图书。
+- 通过 KOReader Sync 在设备间同步阅读位置。
+- 为可重排 EPUB 内置霞鹜文楷和 Source Serif 4 字体；PDF 和固定版式 EPUB 保留原排版。
+
+## 运行要求
+
+- macOS 和 Xcode
+- iPhone 或 iPad，iOS/iPadOS 15 或更高版本
+
+## 构建和运行
+
+1. 打开 `SimpleReader.xcodeproj`。
+2. 选择 `SimpleReader` scheme 和 iPhone 或 iPad 模拟器。
+3. 点击 Run。首次构建时，Xcode 会通过 Swift Package Manager 下载依赖。
 
 ## 使用
 
-- **书库 → +**：从 Files 导入 EPUB / PDF。也支持从其他应用“用 Simple Reader 打开”。
-- **书库 → 选择**：多选或全选当前列表中的图书，点击底部“删除所选”并确认。切换“全部图书 / 最近阅读”会清空选择；删除只移除本机文件和阅读记录，服务器上的图书会保留。
-- **在线书库 → +**：填入 Calibre 的 `/opds` 地址及可选 Basic Auth 凭据。支持搜索、分页、图书详情和前台下载。
-- **下载**：查看队列、取消下载、失败后重新下载。最多两项同时进行。进入后台/进程被终止后不保证继续下载；重新打开后可从 OPDS 重新下载。
-- **设置 → KOReader Sync**：输入在 KOReader 注册的现有账号、相同服务器和密码，验证后启用。
-- 两端需要使用相同的 EPUB/PDF 文件。默认按 KOReader **内容摘要**匹配；如果 KOReader 使用文件名模式，请在本应用启用相同模式，并确保文件名与“原始导入/下载文件名”一致。
-- 阅读界面提供目录、前后页、手动同步；EPUB 可调字号和主题，PDF 可缩放。
-- 可重排 EPUB 正文默认使用霞鹜文楷（LXGW WenKai）显示中文等 CJK 字符，西文使用 Source Serif 4 Text，包含常规、粗体、斜体和粗斜体。字体随应用离线提供；缺失字形使用系统衬线字体回退。PDF 和固定版式 EPUB 保留原有排版。
-- 打开目录会自动滚动到蓝色“当前位置”行，位于正在阅读的章节下方；EPUB 显示阅读百分比，PDF 显示当前页 / 总页数。点击该行可关闭目录并继续阅读。
-- 同步冲突会提供本机/远端选择。解析失败可选择按百分比近似跳转；不会将百分比或 Readium Locator 直接冒充 XPointer 上传。
-- 封面、空白页和纯图片 EPUB 可以打开。图片和 SVG 使用元素 XPointer，同一章节内的多张图片分别定位；空白页或仅有 CSS 背景的页面定位到章节起点。同步失败会显示在底部状态栏。同一远端位置的近似跳转在一次阅读中只自动询问一次；之后可手动同步重试。
+在“书库”中导入 EPUB/PDF，或在“在线书库”中添加 Calibre 的 OPDS 地址。需要认证的书库可以填写 Basic Auth 用户名和密码。
 
-## 构建与测试
+要使用 KOReader Sync，请在设置中填写已有的 KOReader 账号和服务器地址。两台设备需要使用相同的图书文件，并选择相同的匹配方式：默认按内容摘要匹配，也可以按原始文件名匹配。
 
-每次完成代码修改后，都要递增 `SimpleReader/Resources/Info.plist` 中的 `CFBundleVersion`（构建号）。需要发布新版本或调整版本时，再更新 `CFBundleShortVersionString`（版本号）。
+## 许可证
 
-```sh
-xcodebuild -project SimpleReader.xcodeproj -scheme SimpleReader \
-  -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath .build/DerivedData ARCHS=arm64 build
-
-xcodebuild -project SimpleReader.xcodeproj -scheme SimpleReader \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
-  -derivedDataPath .build/DerivedData ARCHS=arm64 test
-```
-
-保留默认模拟器签名；关闭签名可能导致 Keychain 返回 -34018。
-
-`ARCHS=arm64` 适用于 Apple Silicon Mac；Intel Mac 改为对应架构。依赖版本和传递依赖锁定在 `Package.resolved` 中。
-
-工程文件已提供，无需 XcodeGen 或外部工程生成器。新增源文件时在 Xcode 中加入相应 target；代码与工程修改使用内置补丁工具。
-
-默认 Bundle ID 为 `com.leo.SimpleReader`；真机运行时可以在 Xcode 中调整。
-
-## 打包 unsigned IPA
-
-在安装完整 Xcode 的 Mac 上，从项目任意目录运行下面的脚本。脚本会构建真机 Release archive，关闭代码签名，再将 `.app` 打包到 IPA 的 `Payload` 目录。首次构建需要网络下载 SPM 依赖。
-
-```sh
-./Scripts/build_unsigned_ipa.sh
-```
-
-产物：`.build/unsigned/SimpleReader-unsigned.ipa`。脚本会在 archive 构建成功后打包，并在系统提供 `unzip` 时检查 IPA 压缩包完整性。archive 保存在 `.build/unsigned/SimpleReader.xcarchive`，中间打包目录会自动清理。
-
-未签名 IPA 需要通过签名工具重新签名后才能安装到普通 iPhone / iPad。`.build` 已被 Git 忽略，构建产物不会进入代码提交。
-
-## 本地联调，不使用真实账号
-
-```sh
-python3 Scripts/fixture_server.py
-```
-
-在模拟器添加 `http://127.0.0.1:8765/opds`，凭据 `demo / demo`；同步服务器填写 `http://127.0.0.1:8765`，账号相同。测试服务器提供搜索入口、两页目录、一份 EPUB 和 KOReader 协议接口，进度仅存于内存。
-
-这是协议测试服务，不能替代实际 Calibre 与 KOReader 设备验收。真机不能用 `127.0.0.1` 访问 Mac，实际测试应使用你的局域网服务器。
-
-## 架构与数据
-
-- `BookImportService` 是 Files 和下载共用的入库入口；复制到 staging、验证、提取元数据和封面，再移动文件并保存 Core Data。相同 SHA-256 去重。
-- `Application Support/SimpleReader/Books` 存图书、`Covers` 存封面、`Library.sqlite` 存元数据和进度；相对路径可以适应容器迁移。启动时清理 staging 和未入库的孤立文件。
-- 阅读器持久化 Readium Locator 或 PDF 的零基页码；`EPUBPositionBridge` 转换 DOM 文字 / 图片 / 章节起点与 XPointer，`SyncCoordinator` 处理网络和冲突。
-- 原始 OPF spine 与 Readium readingOrder 分开保存，避免非线性章节导致 DocFragment 编号漂移。远端定位到不支持的非线性章节时，显示近似跳转选项。
-- 本地 UUID、完整 SHA-256、KOReader sampled MD5、原始文件名 MD5 各司其职。
-- 密码只在 Keychain 中存储；服务器配置和稳定设备 ID 在 Core Data 中持久化。公网要求 HTTPS，不禁用证书验证；局域网可使用 HTTP。
-- 同步使用已观察到的远端状态作为基线。有本地待上传位置和未确认的远端变化时，不自动覆盖。上传期间继续阅读的更新仍保留为待同步。
-- 同步请求等待期间发生翻页或目录跳转时，保留当前阅读位置，远端进度留待下次同步处理；即使 EPUB 的延迟保存尚未完成，也不会自动跳回远端页面。退到后台和退出阅读时只处理上传，不自动跳转或弹出同步位置选择。
-
-## 首版限制
-
-无 DRM、批注、全文搜索、TTS、书籍文件云同步、后台下载或 App Store 分发流程。
-EPUB 同步支持正文与图片元素；不同排版引擎不保证字符级一致，也不保存单张大图内部的滚动偏移。空白页和 CSS 背景页面只能定位到章节起点。旧 KOReader DOM 版本、损坏 XHTML 或部分固定版式 EPUB 可能无法转换，失败时保留本地位置并暂停上传。
-后台同步是尽力完成；离线或进程终止后，待同步状态会保存，在下次打开图书时重新检查远端再上传。
-
-## 许可
-
-AGPL-3.0-or-later，参见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
-Readest 的 DOM/XPointer 方法经适配用于 Readium；保留来源及修改说明。
-Readium 与传递依赖许可文本在 `Docs/Licenses` 和应用资源中提供。
-测试包含 Readest 发布的 Alice/KOReader 引擎 oracle（707 个词位置）以及项目生成的中英文 EPUB。
+Simple Reader 使用 AGPL-3.0-or-later 许可证，详见 [LICENSE](LICENSE)。第三方组件和来源说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，许可证文本位于 `Docs/Licenses` 和应用资源中。

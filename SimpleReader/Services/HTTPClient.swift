@@ -8,7 +8,11 @@ struct ServerCredentials {
 
 enum NetworkPolicy {
     static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
-        a.scheme?.lowercased() == b.scheme?.lowercased() && a.host?.lowercased() == b.host?.lowercased() && (a.port ?? (a.scheme == "https" ? 443 : 80)) == (b.port ?? (b.scheme == "https" ? 443 : 80))
+        let firstPort = a.port ?? (a.scheme == "https" ? 443 : 80)
+        let secondPort = b.port ?? (b.scheme == "https" ? 443 : 80)
+        return a.scheme?.lowercased() == b.scheme?.lowercased()
+            && a.host?.lowercased() == b.host?.lowercased()
+            && firstPort == secondPort
     }
     static func validate(_ url: URL) throws {
         guard let host = url.host?.lowercased(), url.user == nil, url.password == nil else { throw AppFailure("请输入不含密码的完整服务器地址") }
@@ -19,10 +23,16 @@ enum NetworkPolicy {
         if host == "localhost" || host.hasSuffix(".local") || !host.contains(".") && !host.contains(":") { return true }
         let parts = host.split(separator: ".").compactMap { Int($0) }
         if parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) {
-            return parts[0] == 10 || parts[0] == 127 || parts[0] == 192 && parts[1] == 168 || parts[0] == 172 && (16...31).contains(parts[1]) || parts[0] == 169 && parts[1] == 254
+            switch (parts[0], parts[1]) {
+            case (10, _), (127, _), (192, 168), (172, 16...31), (169, 254):
+                return true
+            default:
+                return false
+            }
         }
         let ipv6 = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        return ipv6 == "::1" || ipv6.hasPrefix("fc") && ipv6.contains(":") || ipv6.hasPrefix("fd") && ipv6.contains(":") || ipv6.hasPrefix("fe80:")
+        let isUniqueLocal = (ipv6.hasPrefix("fc") || ipv6.hasPrefix("fd")) && ipv6.contains(":")
+        return ipv6 == "::1" || isUniqueLocal || ipv6.hasPrefix("fe80:")
     }
 }
 
