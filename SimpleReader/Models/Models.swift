@@ -49,7 +49,7 @@ struct OPDSServer: Identifiable, Codable, Equatable {
 }
 struct ReaderSettings: Codable {
     var fontSize: Double = 110
-    var theme = "light"
+    var theme = "system"
 }
 struct SyncSettings: Codable {
     var url = URL(string: "https://sync.koreader.rocks")!

@@ -40,6 +40,7 @@ import CoreData
             if key == "settings" { settings = try JSONDecoder().decode(AppSettings.self, from: payload) }
             else { books.append(try JSONDecoder().decode(Book.self, from: payload)) }
         }
+        if settings.reader.theme == "sepia" { settings.reader.theme = "system" }
         try saveSettings(settings) // persist a stable device ID from the first launch
         // Staging is never a committed book. A killed import can leave files here.
         for file in (try? FileManager.default.contentsOfDirectory(at: self.root.appendingPathComponent("Staging"), includingPropertiesForKeys: nil)) ?? [] {

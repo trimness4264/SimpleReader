@@ -131,7 +131,7 @@ struct ReaderPreferencesView: View {
                     Text("\(Int(store.settings.reader.fontSize))%")
                 }
                 Picker("主题", selection: Binding(get: { store.settings.reader.theme }, set: { value in save { $0.theme = value } })) {
-                    Text("日间").tag("light"); Text("暖色").tag("sepia"); Text("夜间").tag("dark")
+                    Text("跟随系统").tag("system"); Text("日间").tag("light"); Text("夜间").tag("dark")
                 }
             }.navigationTitle("阅读设置").toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } } }
         }.navigationViewStyle(.stack).errorAlert($error)

@@ -4,6 +4,62 @@ import ReadiumNavigator
 @testable import SimpleReader
 
 final class CoreTests: XCTestCase {
+    @MainActor func testReaderThemeDefaultsToSystemAndMigratesWarmTheme() throws {
+        XCTAssertEqual(ReaderSettings().theme, "system")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root)
+        var settings = store.settings
+        settings.reader.theme = "sepia"
+        try store.saveSettings(settings)
+        let restored = try LibraryStore(root: root)
+        XCTAssertEqual(restored.settings.reader.theme, "system")
+    }
+
+    @MainActor func testEPUBThemeFollowsAppearanceAndPreservesManualChoice() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true)
+        var settings = store.settings
+        settings.reader.theme = "system"
+        try store.saveSettings(settings)
+        let readium = ReadiumService()
+        let file = Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/sample.epub")
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: file)
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium, sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.overrideUserInterfaceStyle = .dark
+        window.rootViewController = session.container
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        XCTAssertEqual(navigator.settings.theme, .dark)
+        window.overrideUserInterfaceStyle = .light
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(navigator.settings.theme, .light)
+        window.overrideUserInterfaceStyle = .dark
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(navigator.settings.theme, .dark)
+        settings.reader.theme = "light"
+        try store.saveSettings(settings)
+        session.updatePreferences()
+        XCTAssertEqual(navigator.settings.theme, .light)
+        window.overrideUserInterfaceStyle = .light
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(navigator.settings.theme, .light)
+        settings.reader.theme = "dark"
+        try store.saveSettings(settings)
+        session.updatePreferences()
+        XCTAssertEqual(navigator.settings.theme, .dark)
+        settings.reader.theme = "system"
+        try store.saveSettings(settings)
+        session.updatePreferences()
+        XCTAssertEqual(navigator.settings.theme, .light)
+        await session.close()
+    }
+
     func testReaderPageLayoutUsesAvailableIPadViewport() {
         XCTAssertTrue(ReaderPageLayout.displaysTwoPages(size: CGSize(width: 1024, height: 660), idiom: .pad))
         XCTAssertTrue(ReaderPageLayout.displaysTwoPages(size: CGSize(width: 1194, height: 720), idiom: .pad))
