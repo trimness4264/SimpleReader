@@ -48,12 +48,23 @@ struct SyncPrompt: Identifiable {
     private var persistenceError: Error?
     private var offeredApproximateFingerprint: String?
     private var displaysTwoPages = false
+    private var turningPage = false
 
     init(bookID: UUID, store: LibraryStore, readium: ReadiumService, sync: SyncCoordinator) {
         self.bookID = bookID; self.store = store; self.readium = readium; self.sync = sync
         super.init()
         container.onLayout = { [weak self] size, idiom in
             self?.updatePageLayout(size: size, idiom: idiom)
+        }
+        container.onAppearanceChange = { [weak self] in
+            guard let self = self, self.store.settings.reader.theme == "system" else { return }
+            self.updatePreferences()
+        }
+        container.onPageTurnBegan = { [weak self] in self?.navigationRevision += 1 }
+        container.onPageTurn = { [weak self] left in
+            guard let self = self, let epub = self.epub else { return }
+            let forward = left == (epub.presentation.readingProgression == .ltr)
+            Task { await self.turn(forward: forward) }
         }
         current = store.book(bookID)?.position; progression = current?.progression ?? 0
     }
@@ -156,6 +167,10 @@ struct SyncPrompt: Identifiable {
                 let navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: locator, config: .init(preferences: preferences(), fontFamilyDeclarations: try ReaderFonts.declarations()))
                 navigator.delegate = self; epub = navigator
                 container.embed(navigator)
+                container.canTurnPage = { [weak navigator] in
+                    guard let navigator = navigator else { return false }
+                    return publication.metadata.layout != .fixed && !navigator.settings.scroll && navigator.currentSelection == nil
+                }
                 func flatten(_ links: [ReadiumShared.Link], depth: Int = 0) -> [ContentsItem] {
                     links.flatMap { [ContentsItem(title: String(repeating: "  ", count: depth) + ($0.title ?? "章节"), link: $0, pdfPage: nil)] + flatten($0.children, depth: depth+1) }
                 }
@@ -226,7 +241,13 @@ struct SyncPrompt: Identifiable {
     }
     private func preferences() -> EPUBPreferences {
         let settings = store.settings.reader
-        return EPUBPreferences(columnCount: displaysTwoPages ? .two : .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, spread: displaysTwoPages ? .always : .never, theme: settings.theme == "dark" ? .dark : settings.theme == "sepia" ? .sepia : .light)
+        let theme: Theme
+        switch settings.theme {
+        case "light": theme = .light
+        case "dark": theme = .dark
+        default: theme = container.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+        }
+        return EPUBPreferences(columnCount: displaysTwoPages ? .two : .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, spread: displaysTwoPages ? .always : .never, theme: theme)
     }
     private func updatePageLayout(size: CGSize, idiom: UIUserInterfaceIdiom) {
         let twoPages = ReaderPageLayout.displaysTwoPages(size: size, idiom: idiom)
@@ -302,12 +323,30 @@ struct SyncPrompt: Identifiable {
         await synchronize(flushFirst: false, applyRemote: false)
     }
     func turn(forward: Bool) async {
-        guard ready, !closed, !suppressChanges else { return }
+        guard ready, !closed, !suppressChanges, !turningPage else { return }
+        turningPage = true
+        defer { turningPage = false }
         navigationRevision += 1
-        if let epub = epub { if forward { await epub.goForward() } else { await epub.goBackward() } }
+        let animated = !UIAccessibility.isReduceMotionEnabled
+        if let epub = epub {
+            let options = NavigatorGoOptions(animated: animated)
+            if forward { await epub.goForward(options: options) }
+            else { await epub.goBackward(options: options) }
+        }
         else if let pdf = pdf, let doc = pdf.document, let page = pdf.currentPage {
             let index = ReaderPageLayout.nextPDFPage(current: doc.index(for: page), forward: forward, twoPages: displaysTwoPages)
-            if let target = doc.page(at: index) { pdf.go(to: target) }
+            guard let target = doc.page(at: index) else { return }
+            if animated {
+                await withCheckedContinuation { continuation in
+                    UIView.transition(with: pdf, duration: 0.25, options: [.transitionCrossDissolve, .curveEaseInOut], animations: {
+                        pdf.go(to: target)
+                    }, completion: { _ in
+                        continuation.resume()
+                    })
+                }
+            } else {
+                pdf.go(to: target)
+            }
         }
     }
     func go(_ item: ContentsItem) async {
@@ -317,7 +356,7 @@ struct SyncPrompt: Identifiable {
         if let page = item.pdfPage, let target = pdf?.document?.page(at: page) { pdf?.go(to: target) }
     }
     func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false, applyRemote: Bool = true) async {
-        guard ready, !busySync, !suppressChanges, prompt == nil else { return }
+        guard ready, !busySync, !suppressChanges, !turningPage, !container.isPageTurnGestureActive, prompt == nil else { return }
         busySync = true; defer { busySync = false }
         let revision = navigationRevision
         syncMessage = nil
@@ -437,9 +476,70 @@ private enum ReaderFonts {
     }
 }
 
-@MainActor final class ReaderContainerController: UIViewController {
+@MainActor final class ReaderContainerController: UIViewController, UIGestureRecognizerDelegate {
     private var appeared = false
     var onLayout: ((CGSize, UIUserInterfaceIdiom) -> Void)?
+    var onAppearanceChange: (() -> Void)?
+    var canTurnPage: (() -> Bool)?
+    var onPageTurnBegan: (() -> Void)?
+    var onPageTurn: ((Bool) -> Void)?
+    private(set) var isPageTurnGestureActive = false
+    private lazy var pageTurnPan = UIPanGestureRecognizer(target: self, action: #selector(handlePageTurn(_:)))
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        if #available(iOS 17.0, *) {
+            registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: ReaderContainerController, _: UITraitCollection) in
+                controller.onAppearanceChange?()
+            }
+        }
+        pageTurnPan.maximumNumberOfTouches = 1
+        pageTurnPan.delegate = self
+        view.addGestureRecognizer(pageTurnPan)
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if #unavailable(iOS 17.0), previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            onAppearanceChange?()
+        }
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === pageTurnPan && beginPageTurn(translation: pageTurnPan.translation(in: view))
+    }
+
+    func beginPageTurn(translation: CGPoint) -> Bool {
+        guard canTurnPage?() == true, abs(translation.x) > abs(translation.y) else { return false }
+        isPageTurnGestureActive = true
+        // Readium reports location only after scrolling settles. Invalidate an
+        // in-flight sync now, before it can restore a distant remote position.
+        onPageTurnBegan?()
+        return true
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Readium nests chapter and page scroll views. Letting the outer pan
+        // win (including in the margins) skips the rest of the current chapter.
+        gestureRecognizer === pageTurnPan && otherGestureRecognizer is UIPanGestureRecognizer
+            && otherGestureRecognizer.view?.isDescendant(of: view) == true
+    }
+
+    @objc func handlePageTurn(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .ended:
+            finishPageTurn(translation: gesture.translation(in: view))
+        case .cancelled, .failed:
+            isPageTurnGestureActive = false
+        default:
+            break
+        }
+    }
+
+    func finishPageTurn(translation: CGPoint) {
+        isPageTurnGestureActive = false
+        if abs(translation.x) >= 32 { onPageTurn?(translation.x < 0) }
+    }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()

@@ -353,6 +353,75 @@ private final class ReaderSyncStub: ProgressSyncClient {
         XCTAssertEqual(session.prompt?.kind, .conflict)
     }
 
+    func testSyncResponseBeforeSwipeLocationCallbackDoesNotNavigate() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let client = ReaderSyncStub()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { client }))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
+        let window = UIWindow(windowScene: scene); window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        let initial = try XCTUnwrap(navigator.currentLocation)
+        client.remote = RemoteProgress(progress: "/body/DocFragment[2]/body", percentage: 0.8, timestamp: 10, device_id: "other")
+        var settings = store.settings; settings.sync.enabled = true; try store.saveSettings(settings)
+        client.onGet = {
+            XCTAssertTrue(session.container.beginPageTurn(translation: CGPoint(x: -60, y: 0)))
+        }
+        await session.synchronize()
+        XCTAssertEqual(navigator.currentLocation?.href, initial.href)
+        XCTAssertNil(store.book(book.id)?.remoteBaseline)
+        XCTAssertNil(session.prompt)
+    }
+
+    func testLongHorizontalSwipeUsesOnePageAndOwnsNestedScrollGestures() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
+        let window = UIWindow(windowScene: scene); window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        let initial = try XCTUnwrap(navigator.currentLocation)
+        await session.turn(forward: true)
+        try await Task.sleep(nanoseconds: 700_000_000)
+        let next = try XCTUnwrap(navigator.currentLocation)
+        XCTAssertEqual(next.href, initial.href, "The fixture must have more than one page in its first chapter")
+        XCTAssertGreaterThan(next.locations.progression ?? 0, initial.locations.progression ?? 0)
+        await session.turn(forward: false)
+        try await Task.sleep(nanoseconds: 700_000_000)
+
+        let container = session.container
+        let pan = try XCTUnwrap(container.view.gestureRecognizers?.compactMap { $0 as? UIPanGestureRecognizer }.first)
+        XCTAssertFalse(container.beginPageTurn(translation: CGPoint(x: 3, y: 60)), "Vertical gestures are not page turns")
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -300, y: 3)))
+        func checkScrollViews(_ view: UIView) -> Int {
+            var count = 0
+            if let scroll = view as? UIScrollView {
+                XCTAssertTrue(container.gestureRecognizer(pan, shouldBeRequiredToFailBy: scroll.panGestureRecognizer))
+                count += 1
+            }
+            return count + view.subviews.reduce(0) { $0 + checkScrollViews($1) }
+        }
+        XCTAssertGreaterThan(checkScrollViews(navigator.view), 1, "Both chapter and WebView pans must yield")
+        container.finishPageTurn(translation: CGPoint(x: -1200, y: 0))
+        try await Task.sleep(nanoseconds: 700_000_000)
+        XCTAssertEqual(navigator.currentLocation?.href, next.href)
+        XCTAssertEqual(navigator.currentLocation?.locations.progression, next.locations.progression)
+        XCTAssertFalse(container.isPageTurnGestureActive)
+        container.finishPageTurn(translation: CGPoint(x: 1200, y: 0))
+        try await Task.sleep(nanoseconds: 700_000_000)
+        XCTAssertEqual(navigator.currentLocation?.locations.progression, initial.locations.progression)
+    }
+
     func testBackgroundAndCloseDoNotApplyRemoteProgress() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
