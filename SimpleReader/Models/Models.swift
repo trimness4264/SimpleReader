@@ -47,9 +47,23 @@ struct OPDSServer: Identifiable, Codable, Equatable {
     var url: URL
     var username: String
 }
+enum ReadingLayout: String, Codable {
+    case paginated, scroll
+}
 struct ReaderSettings: Codable {
     var fontSize: Double = 110
     var theme = "system"
+    var layout: ReadingLayout = .paginated
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey { case fontSize, theme, layout }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        fontSize = try values.decodeIfPresent(Double.self, forKey: .fontSize) ?? 110
+        theme = try values.decodeIfPresent(String.self, forKey: .theme) ?? "system"
+        layout = try values.decodeIfPresent(ReadingLayout.self, forKey: .layout) ?? .paginated
+    }
 }
 struct SyncSettings: Codable {
     var url = URL(string: "https://sync.koreader.rocks")!
