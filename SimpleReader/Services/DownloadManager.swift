@@ -16,6 +16,12 @@ struct DownloadJob: Identifiable {
     private let http: HTTPClient
     private let importer: BookImportService
     init(http: HTTPClient, importer: BookImportService) { self.http = http; self.importer = importer }
+    var activeCount: Int { jobs.filter { [.queued, .downloading, .importing].contains($0.state) }.count }
+    var failedCount: Int { jobs.filter { $0.state == .failed }.count }
+    var hasHistory: Bool { jobs.contains { [.finished, .cancelled].contains($0.state) } }
+    func clearHistory() {
+        jobs.removeAll { [.finished, .cancelled].contains($0.state) }
+    }
     func enqueue(title: String, link: OPDSLink, credentials: ServerCredentials?) {
         guard !jobs.contains(where: { $0.link.url == link.url && [.queued, .downloading, .importing].contains($0.state) }) else { return }
         jobs.append(DownloadJob(id: UUID(), title: title, link: link, credentials: credentials)); pump()

@@ -38,22 +38,46 @@ struct RootView: View {
     }
     @ViewBuilder private var content: some View {
         if sizeClass == .regular {
-            NavigationView {
-                List {
-                    NavigationLink(destination: LibraryView(environment: environment)) { Label("书库", systemImage: "books.vertical") }
-                    NavigationLink(destination: ServersView(environment: environment)) { Label("在线书库", systemImage: "network") }
-                    NavigationLink(destination: DownloadsView(manager: environment.downloads)) { Label("下载", systemImage: "arrow.down.circle") }
-                    NavigationLink(destination: SettingsView(environment: environment)) { Label("设置", systemImage: "gearshape") }
-                }.listStyle(.sidebar).navigationTitle("Simple Reader")
-                LibraryView(environment: environment)
+            if #available(iOS 16.0, *) {
+                NavigationSplitView {
+                    sidebar
+                } detail: {
+                    NavigationStack { selectedContent }.id(selectedTab)
+                }.navigationSplitViewStyle(.balanced)
+            } else {
+                NavigationView {
+                    sidebar
+                    selectedContent.id(selectedTab)
+                }.navigationViewStyle(.columns)
             }
         } else {
             TabView(selection: $selectedTab) {
                 NavigationView { LibraryView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("书库", systemImage: "books.vertical") }.tag(0)
                 NavigationView { ServersView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("在线书库", systemImage: "network") }.tag(1)
-                NavigationView { DownloadsView(manager: environment.downloads) }.navigationViewStyle(.stack).tabItem { Label("下载", systemImage: "arrow.down.circle") }.tag(2)
-                NavigationView { SettingsView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("设置", systemImage: "gearshape") }.tag(3)
+                NavigationView { SettingsView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("设置", systemImage: "gearshape") }.tag(2)
             }.accentColor(Color(red: 0.19, green: 0.39, blue: 0.34))
+        }
+    }
+    private var sidebar: some View {
+        List {
+            sidebarButton("书库", systemImage: "books.vertical", tab: 0)
+            sidebarButton("在线书库", systemImage: "network", tab: 1)
+            sidebarButton("设置", systemImage: "gearshape", tab: 2)
+        }.listStyle(.sidebar).navigationTitle("Simple Reader")
+    }
+    private func sidebarButton(_ title: String, systemImage: String, tab: Int) -> some View {
+        Button { selectedTab = tab } label: {
+            Label(title, systemImage: systemImage).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .foregroundColor(selectedTab == tab ? .accentColor : .primary)
+        .listRowBackground(selectedTab == tab ? Color.accentColor.opacity(0.12) : Color.clear)
+        .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+    }
+    @ViewBuilder private var selectedContent: some View {
+        switch selectedTab {
+        case 1: ServersView(environment: environment)
+        case 2: SettingsView(environment: environment)
+        default: LibraryView(environment: environment)
         }
     }
 }

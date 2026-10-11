@@ -19,7 +19,12 @@ struct ServersView: View {
                 .swipeActions { Button("编辑") { editing = server }.tint(.blue); Button(role: .destructive) { delete(server) } label: { Label("删除", systemImage: "trash") } }
             }
         }.navigationTitle("在线书库")
-        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("添加服务器") } }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true)
+                Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("添加服务器")
+            }
+        }
         .sheet(isPresented: $adding) { ServerEditor(store: store, server: nil) }
         .sheet(item: $editing) { ServerEditor(store: store, server: $0) }
         .errorAlert($error)
@@ -137,6 +142,7 @@ struct CatalogView: View {
                 if model.catalog == nil && !model.loading { Button("重新加载") { Task { await model.load() } } }
             }
         }.navigationTitle(model.catalog?.title ?? model.server.name).navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true) } }
         .task { if model.catalog == nil { await model.load() } }.errorAlert($model.error)
     }
 }
@@ -172,8 +178,9 @@ private struct EntryView: View {
                     Button { do { environment.downloads.enqueue(title: entry.title, link: link, credentials: try model.credentials()); queued = true } catch { self.error = error.localizedDescription } } label: { Label(link.type == "application/pdf" ? "下载 PDF" : "下载 EPUB", systemImage: "arrow.down.circle") }
                 }
                 if entry.downloads.isEmpty { Text("没有可下载的 EPUB/PDF；DRM 图书暂不支持。").foregroundColor(.secondary) }
-                if queued { Text("已加入下载队列，可在“下载”查看进度。").foregroundColor(.secondary) }
+                if queued { Text("已加入下载队列，点右上角下载按钮查看进度。完成后会自动加入书库。").foregroundColor(.secondary) }
             }
         }.navigationTitle("图书详情").navigationBarTitleDisplayMode(.inline).errorAlert($error)
+        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true) } }
     }
 }
