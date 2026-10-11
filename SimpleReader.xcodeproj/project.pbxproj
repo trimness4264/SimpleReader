@@ -41,6 +41,7 @@
 		000000000000000000000051 /* Tests/BridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000015 /* Tests/BridgeTests.swift */; };
 		000000000000000000000052 /* Tests/CoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000016 /* Tests/CoreTests.swift */; };
 		000000000000000000000053 /* Tests/NetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000017 /* Tests/NetworkTests.swift */; };
+		ABC812000000000000000002 /* Tests/TypographyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABC812000000000000000001 /* Tests/TypographyTests.swift */; };
 		000000000000000000000056 /* Tests/Fixtures in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001C /* Tests/Fixtures */; };
 /* End PBXBuildFile section */
 
@@ -81,6 +82,7 @@
 		000000000000000000000014 /* SimpleReader/Views/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/SettingsView.swift; sourceTree = "<group>"; };
 		000000000000000000000015 /* Tests/BridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/BridgeTests.swift; sourceTree = "<group>"; };
 		000000000000000000000016 /* Tests/CoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/CoreTests.swift; sourceTree = "<group>"; };
+		ABC812000000000000000001 /* Tests/TypographyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/TypographyTests.swift; sourceTree = "<group>"; };
 		000000000000000000000017 /* Tests/NetworkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/NetworkTests.swift; sourceTree = "<group>"; };
 		000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */ = {isa = PBXFileReference; lastKnownFileType = text; path = SimpleReader/Resources/EPUBPositionBridge.js; sourceTree = "<group>"; };
 		000000000000000000000019 /* SimpleReader/Resources/LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SimpleReader/Resources/LICENSE.txt; sourceTree = "<group>"; };
@@ -155,6 +157,7 @@
 				00000000000000000000001B /* SimpleReader/Resources/THIRD_PARTY_NOTICES.md */,
 				000000000000000000000015 /* Tests/BridgeTests.swift */,
 				000000000000000000000016 /* Tests/CoreTests.swift */,
+				ABC812000000000000000001 /* Tests/TypographyTests.swift */,
 				000000000000000000000017 /* Tests/NetworkTests.swift */,
 				00000000000000000000001C /* Tests/Fixtures */,
 				00000000000000000000001D /* SimpleReader/Resources/Info.plist */,
@@ -296,6 +299,7 @@
 			files = (
 				000000000000000000000051 /* Tests/BridgeTests.swift in Sources */,
 				000000000000000000000052 /* Tests/CoreTests.swift in Sources */,
+				ABC812000000000000000002 /* Tests/TypographyTests.swift in Sources */,
 				000000000000000000000053 /* Tests/NetworkTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

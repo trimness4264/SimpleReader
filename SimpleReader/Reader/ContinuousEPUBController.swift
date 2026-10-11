@@ -24,6 +24,7 @@ extension EPUBReadingNavigator {
     private(set) var currentLocation: Locator?
     var onLocationChanged: ((Locator) -> Void)?
     var onError: ((Error) -> Void)?
+    var onContentTap: (() -> Void)?
     let scrollView = UIScrollView()
     private let server: ContinuousPublicationServer
     private let initialLocation: Locator?
@@ -122,12 +123,15 @@ extension EPUBReadingNavigator {
         let foreground = dark ? "#e8e8e8" : "#202020"
         let fonts = server.baseURL.appendingPathComponent("_reader/fonts/").absoluteString
         return """
-        @font-face {font-family:ReaderSerif;src:url('\(fonts)SourceSerif4-Regular.ttf')}
-        @font-face {font-family:ReaderSerif;src:url('\(fonts)SourceSerif4-It.ttf');font-style:italic}
-        @font-face {font-family:ReaderSerif;src:url('\(fonts)SourceSerif4-Bold.ttf');font-weight:bold}
-        @font-face {font-family:ReaderCJK;src:url('\(fonts)LXGWWenKai-Regular.ttf')}
+        @font-face {font-family:'Source Serif 4';src:url('\(fonts)SourceSerif4-Regular.ttf')}
+        @font-face {font-family:'Source Serif 4';src:url('\(fonts)SourceSerif4-It.ttf');font-style:italic}
+        @font-face {font-family:'Source Serif 4';src:url('\(fonts)SourceSerif4-Bold.ttf');font-weight:bold}
+        @font-face {font-family:'Source Serif 4';src:url('\(fonts)SourceSerif4-BoldIt.ttf');font-style:italic;font-weight:bold}
+        @font-face {font-family:'LXGW WenKai';src:url('\(fonts)LXGWWenKai-Regular.ttf')}
         html {height:auto!important;min-height:0!important;overflow:hidden!important;column-count:auto!important;column-width:auto!important;writing-mode:horizontal-tb!important;background:\(background)!important;color:\(foreground)!important;font-size:\(settings.fontSize)%!important;-webkit-text-size-adjust:100%}
-        body {height:auto!important;min-height:0!important;overflow:visible!important;margin:0!important;padding:16px 24px!important;box-sizing:border-box!important;font-family:ReaderSerif,ReaderCJK,serif!important;line-height:1.65!important;writing-mode:horizontal-tb!important;color:inherit!important;background:transparent!important}
+        body {height:auto!important;min-height:0!important;overflow:visible!important;margin:0!important;padding:16px \(24 * settings.pageMargins)px!important;box-sizing:border-box!important;font-family:\(settings.font.cssStack)!important;line-height:\(settings.lineHeight)!important;writing-mode:horizontal-tb!important;color:inherit!important;background:transparent!important}
+        body * {font-family:inherit!important;line-height:inherit!important}
+        body pre,body code,body kbd,body samp {font-family:monospace!important}
         img,svg,video,object {max-width:100%!important;height:auto;box-sizing:border-box}
         table,pre {max-width:100%;overflow-wrap:anywhere} pre {white-space:pre-wrap}
         """
@@ -148,6 +152,24 @@ extension EPUBReadingNavigator {
         (() => {
           let style;
           let pending = false;
+          let pointerStart;
+          let dragged = false;
+          let tapTimer;
+          document.addEventListener('pointerdown', event => { clearTimeout(tapTimer);pointerStart={x:event.clientX,y:event.clientY};dragged=false; }, {passive:true});
+          document.addEventListener('pointermove', event => {
+            if(pointerStart && Math.hypot(event.clientX-pointerStart.x,event.clientY-pointerStart.y)>8) dragged=true;
+          }, {passive:true});
+          document.addEventListener('pointercancel', () => {dragged=true;pointerStart=undefined;}, {passive:true});
+          document.addEventListener('click', event => {
+            clearTimeout(tapTimer);
+            if(dragged || event.defaultPrevented || event.detail>1 || window.getSelection()?.isCollapsed===false
+                || event.target.closest('a,button,input,textarea,select,label,[contenteditable="true"],[role="button"]')
+                || event.clientX<innerWidth*0.2 || event.clientX>innerWidth*0.8) return;
+            tapTimer=setTimeout(() => {
+              if(!dragged && window.getSelection()?.isCollapsed!==false)
+                window.webkit.messageHandlers.continuousChapterHeight.postMessage({index:\(index),tap:true});
+            },250);
+          });
           function measure() {
             if (!document.body || pending) return;
             pending = true;
@@ -239,6 +261,12 @@ extension EPUBReadingNavigator {
         updatingLayout = false
         if !navigating { retainChapters(around: visibleIndex()) }
         scheduleLocation()
+    }
+
+    fileprivate func contentTapped(index: Int, webView: WKWebView?) {
+        guard !closed, !navigating, !scrollView.isDragging, !scrollView.isDecelerating,
+              let active = webViews[index], active === webView else { return }
+        onContentTap?()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -391,8 +419,11 @@ extension EPUBReadingNavigator {
     init(owner: ContinuousEPUBController) { self.owner = owner }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any],
-              let index = body["index"] as? Int, let height = body["height"] as? Double else { return }
-        owner?.measuredHeight(index: index, height: CGFloat(height), webView: message.webView)
+              let index = body["index"] as? Int else { return }
+        if body["tap"] as? Bool == true { owner?.contentTapped(index: index, webView: message.webView) }
+        else if let height = body["height"] as? Double {
+            owner?.measuredHeight(index: index, height: CGFloat(height), webView: message.webView)
+        }
     }
 }
 
