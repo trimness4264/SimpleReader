@@ -1,5 +1,6 @@
 import XCTest
 import WebKit
+import PDFKit
 import ReadiumShared
 import ReadiumNavigator
 @testable import SimpleReader
@@ -601,6 +602,210 @@ private final class ReaderSyncStub: ProgressSyncClient {
             XCTAssertEqual(store.book(book.id)?.position?.xpointer, pointer)
             XCTAssertFalse(store.book(book.id)!.pendingSync)
         }
+    }
+    func testEPUBResizePreservesCheckpointWithoutCreatingUpload() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene), host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(session.container); host.view.addSubview(session.container.view)
+        session.container.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        session.container.didMove(toParent: host)
+        defer { window.isHidden = true }
+        await session.load()
+        for _ in 0..<4 {
+            await session.turn(forward: true)
+            try await Task.sleep(nanoseconds: 150_000_000)
+        }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        await session.flush()
+        var checkpoint = try XCTUnwrap(store.book(book.id))
+        let saved = try XCTUnwrap(checkpoint.position)
+        XCTAssertGreaterThan(saved.progression, 0)
+        checkpoint.pendingSync = false; try store.save(checkpoint)
+        for size in [CGSize(width: 1000, height: 650), CGSize(width: 390, height: 700)] {
+            session.container.view.frame.size = size
+            XCTAssertTrue(session.isRestoring, "Protect the reading position before the viewport changes")
+            session.container.view.setNeedsLayout(); session.container.view.layoutIfNeeded()
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            await session.flush()
+            XCTAssertEqual(store.book(book.id)?.position?.xpointer, saved.xpointer)
+            XCTAssertEqual(store.book(book.id)?.position?.updatedAt, saved.updatedAt)
+            XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync, "A viewport change is not a reading edit")
+            XCTAssertNil(session.error)
+            XCTAssertNil(session.recoveryError)
+            XCTAssertFalse(session.isRestoring)
+            let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+            let visible = try await readingAnchorIsVisible(XCTUnwrap(saved.xpointer), in: navigator)
+            XCTAssertEqual(visible, true, "The original reading anchor must remain visible after reflow")
+        }
+    }
+
+    private func readingAnchorIsVisible(_ pointer: String, in navigator: EPUBNavigatorViewController) async throws -> Bool {
+        let result = try await navigator.evaluateJavaScript("""
+            \(try EPUBPositionBridge.source)
+            (() => {
+                const target = SimpleReaderBridge.resolve(\(try EPUBPositionBridge.quoted(pointer)));
+                const element = document.querySelector(target.cssSelector);
+                const node = element.childNodes[target.textNodeIndex];
+                const range = document.createRange();
+                if (node && node.nodeType === Node.TEXT_NODE) {
+                    range.setStart(node, target.textOffset);
+                    range.setEnd(node, Math.min(node.length, target.textOffset + 1));
+                } else { range.selectNode(element); }
+                return Array.from(range.getClientRects()).some(rect =>
+                    rect.right > 0 && rect.left < innerWidth && rect.bottom > 0 && rect.top < innerHeight);
+            })()
+            """).get()
+        return result as? Bool == true
+    }
+
+    func testForegroundRestoresBlankEPUBWithoutChangingCheckpoint() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        await session.turn(forward: true)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        await session.flush()
+        var checkpoint = try XCTUnwrap(store.book(book.id))
+        checkpoint.pendingSync = false; try store.save(checkpoint)
+        let saved = try XCTUnwrap(checkpoint.position)
+        let original = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+
+        session.resignActive()
+        await session.foreground()
+        XCTAssertTrue(session.container.children.first === original, "A brief interruption should retain the renderer")
+        await session.background()
+        _ = try await original.evaluateJavaScript("document.body.replaceChildren() ").get()
+        await session.foreground()
+
+        XCTAssertFalse(session.isRestoring)
+        XCTAssertNil(session.recoveryError)
+        XCTAssertEqual(store.book(book.id)?.position, saved)
+        XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
+        let restored = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        let visible = try await readingAnchorIsVisible(XCTUnwrap(saved.xpointer), in: restored)
+        XCTAssertTrue(visible, "Returning to the foreground must render the saved paragraph without a page turn")
+        await session.close()
+    }
+
+    func testCloseCancelsForegroundRecovery() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        let saved = store.book(book.id)?.position
+        let original = try XCTUnwrap(session.container.children.first)
+        await session.background()
+        let recovery = Task { await session.foreground() }
+        await Task.yield()
+        await session.close()
+        await recovery.value
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(session.container.children.first === original)
+        XCTAssertEqual(store.book(book.id)?.position, saved)
+        XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
+    }
+
+    func testForegroundRetainsTurnBeforeDebouncedSave() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        let initial = try XCTUnwrap(store.book(book.id)?.position)
+        let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        await session.turn(forward: true)
+        for _ in 0..<30 {
+            if session.progression > initial.progression { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let location = try XCTUnwrap(navigator.currentLocation)
+        let pointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: location)
+        XCTAssertEqual(store.book(book.id)?.position, initial, "The save debounce must still be pending")
+        await session.background()
+        await session.foreground()
+        XCTAssertNil(session.recoveryError)
+        let saved = try XCTUnwrap(store.book(book.id)?.position)
+        XCTAssertGreaterThan(saved.progression, initial.progression)
+        XCTAssertNotNil(saved.xpointer, "The last turn must remain usable for KOReader Sync")
+        let restored = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        let visible = try await readingAnchorIsVisible(pointer, in: restored)
+        XCTAssertTrue(visible)
+        await session.close()
+    }
+
+    func testPDFResizeRetainsVisiblePageWithoutCreatingUpload() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let file = root.appendingPathComponent("rotation.pdf")
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 800))
+        try renderer.writePDF(to: file) { context in
+            for number in 1...6 {
+                context.beginPage()
+                ("Page \(number)" as NSString).draw(at: CGPoint(x: 40, y: 40),
+                    withAttributes: [.font: UIFont.systemFont(ofSize: 24)])
+            }
+        }
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: file)
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene), host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(session.container); host.view.addSubview(session.container.view)
+        session.container.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        session.container.didMove(toParent: host)
+        defer { window.isHidden = true }
+        await session.load()
+        for _ in 0..<3 { await session.turn(forward: true) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await session.flush()
+        var checkpoint = try XCTUnwrap(store.book(book.id))
+        let saved = try XCTUnwrap(checkpoint.position)
+        XCTAssertEqual(saved.pdfPage, 3)
+        checkpoint.pendingSync = false; try store.save(checkpoint)
+        let pdf = try XCTUnwrap(session.container.view.subviews.compactMap { $0 as? PDFView }.first)
+        let page = try XCTUnwrap(pdf.document?.page(at: 3))
+        for size in [CGSize(width: 1000, height: 650), CGSize(width: 390, height: 700)] {
+            session.container.view.frame.size = size
+            session.container.view.setNeedsLayout(); session.container.view.layoutIfNeeded()
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            await session.flush()
+            XCTAssertTrue(pdf.visiblePages.contains(page), "Viewport \(size), visible pages: \(pdf.visiblePages.map { pdf.document!.index(for: $0) }), destination: \(String(describing: pdf.currentDestination))")
+            XCTAssertEqual(store.book(book.id)?.position, saved)
+            XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
+            XCTAssertFalse(session.isRestoring)
+            XCTAssertNil(session.recoveryError)
+        }
+        await session.close()
     }
     func testImportDeduplicatesRenamedBookAndRejectsHTML() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

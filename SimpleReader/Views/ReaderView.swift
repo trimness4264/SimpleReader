@@ -22,7 +22,18 @@ struct ReaderView: View {
         NavigationView {
             VStack(spacing: 0) {
                 ReaderSurface(session: session)
-                    .overlay { if !session.ready && session.error == nil { ProgressView("正在打开…") } }
+                    .overlay {
+                        if let error = session.recoveryError {
+                            VStack(spacing: 12) {
+                                Text(error)
+                                Button("重新加载正文") { Task { await session.retryRecovery() } }
+                            }.padding().background(Color(UIColor.systemBackground))
+                        } else if session.isRestoring {
+                            ProgressView("正在恢复阅读位置…")
+                        } else if !session.ready && session.error == nil {
+                            ProgressView("正在打开…")
+                        }
+                    }
                 if let warning = session.bridgeWarning { Text(warning).font(.caption).foregroundColor(.orange).padding(8) }
                 HStack {
                     Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一页")
@@ -43,7 +54,14 @@ struct ReaderView: View {
             }
         }.navigationViewStyle(.stack)
         .task { await session.load() }
-        .onChange(of: phase) { value in Task { if value == .active { await session.synchronize() } else if value == .background { await session.background() } } }
+        .onChange(of: phase) { value in
+            switch value {
+            case .inactive: session.resignActive()
+            case .background: Task { await session.background() }
+            case .active: Task { await session.foreground() }
+            @unknown default: break
+            }
+        }
         .sheet(isPresented: $showContents) {
             ReaderContentsView(session: session)
         }
