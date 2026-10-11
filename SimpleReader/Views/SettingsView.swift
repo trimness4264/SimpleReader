@@ -13,7 +13,7 @@ struct SettingsView: View {
                 Text(store.settings.sync.enabled ? "已启用：打开图书时拉取，关闭时尝试上传。" : "同步未启用").font(.caption).foregroundColor(.secondary)
                 Text(sync.status).font(.caption).foregroundColor(.secondary)
             }
-            Section(header: Text("阅读")) { NavigationLink("默认字号与主题", destination: ReaderPreferencesView(store: store, onChange: {})) }
+            Section(header: Text("阅读")) { NavigationLink("默认阅读设置", destination: ReaderPreferencesView(store: store, onChange: {})) }
             Section(header: Text("关于")) {
                 NavigationLink("关于 Simple Reader", destination: AboutView())
             }

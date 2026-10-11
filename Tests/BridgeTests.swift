@@ -387,9 +387,22 @@ private final class ReaderSyncStub: ProgressSyncClient {
         let session = ReaderSession(bookID: book.id, store: store, readium: readium,
                                     sync: SyncCoordinator(store: store, http: HTTPClient()))
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
-        let window = UIWindow(windowScene: scene); window.rootViewController = session.container; window.makeKeyAndVisible()
+        let window = UIWindow(windowScene: scene), host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(session.container); host.view.addSubview(session.container.view)
+        session.container.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        session.container.didMove(toParent: host)
         defer { window.isHidden = true }
         await session.load()
+        session.container.view.layoutIfNeeded()
+        for _ in 0..<50 {
+            if !session.isRestoring { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertFalse(session.isRestoring)
+        XCTAssertNil(session.recoveryError)
+        // Readium can publish the initial locator before enabling page navigation.
+        try await Task.sleep(nanoseconds: 700_000_000)
         let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
         let initial = try XCTUnwrap(navigator.currentLocation)
         await session.turn(forward: true)
@@ -421,6 +434,68 @@ private final class ReaderSyncStub: ProgressSyncClient {
         container.finishPageTurn(translation: CGPoint(x: 1200, y: 0))
         try await Task.sleep(nanoseconds: 700_000_000)
         XCTAssertEqual(navigator.currentLocation?.locations.progression, initial.locations.progression)
+        XCTAssertEqual(navigator.view.transform, .identity)
+        XCTAssertEqual(container.view.subviews.count, 1, "A completed turn must remove its old-page snapshot")
+        await container.animatePageTurn(direction: 1) {
+            container.cancelPageTransition()
+            return false
+        }
+        XCTAssertEqual(navigator.currentLocation?.locations.progression, initial.locations.progression)
+        XCTAssertEqual(navigator.view.transform, .identity)
+        XCTAssertEqual(container.view.subviews.count, 1, "A cancelled turn must leave only the reader content")
+    }
+
+    func testPageTurnRecognizesQuickSwipeAndCancelsReversal() {
+        let container = ReaderContainerController()
+        container.loadViewIfNeeded()
+        container.view.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        container.canTurnPage = { true }
+        var turns: [Bool] = []
+        container.onPageTurn = { turns.append($0) }
+
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -10, y: 0)))
+        container.finishPageTurn(translation: CGPoint(x: -10, y: 0), velocity: CGPoint(x: -700, y: 0))
+        XCTAssertEqual(turns, [true], "A short, fast swipe advances one page")
+        XCTAssertFalse(container.isPageTurnGestureActive)
+
+        container.finishPageTurn(translation: CGPoint(x: -10, y: 0))
+        XCTAssertEqual(turns, [true], "A short drag settles back without navigation")
+        container.finishPageTurn(translation: CGPoint(x: -40, y: 0), velocity: CGPoint(x: 700, y: 0))
+        XCTAssertEqual(turns, [true], "Reversing a drag must cancel instead of turning the opposite page")
+        container.finishPageTurn(translation: CGPoint(x: 1000, y: 0))
+        XCTAssertEqual(turns, [true, false], "Even a long drag navigates only once")
+    }
+
+    func testCancellingActivePageAnimationRestoresContent() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene), container = ReaderContainerController()
+        window.rootViewController = container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        for usesPDF in [false, true] {
+            let child = UIViewController()
+            child.view.backgroundColor = .white
+            container.replaceChild(with: child)
+            let content: UIView
+            if usesPDF {
+                child.willMove(toParent: nil); child.view.removeFromSuperview(); child.removeFromParent()
+                content = PDFView(frame: container.view.bounds)
+                container.view.addSubview(content)
+            } else {
+                content = child.view
+            }
+            container.view.layoutIfNeeded()
+            // A newly installed view needs a display frame before UIKit can snapshot it.
+            try await Task.sleep(nanoseconds: 100_000_000)
+            let turn = Task {
+                await container.animatePageTurn(direction: 1) { true }
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+            XCTAssertEqual(container.view.subviews.count, 2, "The old page remains visible during the transition")
+            container.cancelPageTransition()
+            await turn.value
+            XCTAssertEqual(content.transform, .identity)
+            XCTAssertEqual(container.view.subviews.count, 1, "Cancelling must reveal the reader and release the suspended turn")
+        }
     }
 
     func testBackgroundAndCloseDoNotApplyRemoteProgress() async throws {
@@ -877,5 +952,70 @@ private final class ReaderSyncStub: ProgressSyncClient {
         XCTAssertEqual(store.books.count, 1)
         XCTAssertEqual(imports.pendingCount, 0)
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: store.fileURL("Staging").path).isEmpty)
+    }
+
+    func testReadingLayoutDefaultsToPaginationForExistingSettings() throws {
+        let legacy = Data(#"{"fontSize":150,"theme":"dark"}"#.utf8)
+        let settings = try JSONDecoder().decode(ReaderSettings.self, from: legacy)
+        XCTAssertEqual(settings.fontSize, 150)
+        XCTAssertEqual(settings.theme, "dark")
+        XCTAssertEqual(settings.layout, .paginated)
+        var scrolling = settings
+        scrolling.layout = .scroll
+        let restored = try JSONDecoder().decode(ReaderSettings.self, from: JSONEncoder().encode(scrolling))
+        XCTAssertEqual(restored.layout, .scroll)
+        XCTAssertEqual(restored.fontSize, 150)
+        XCTAssertEqual(restored.theme, "dark")
+    }
+
+    func testReadingLayoutSwitchPreservesAnchorWithoutCreatingUpload() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene), host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(session.container); host.view.addSubview(session.container.view)
+        session.container.view.frame = CGRect(x: 0, y: 0, width: 1000, height: 650)
+        session.container.didMove(toParent: host)
+        defer { window.isHidden = true }
+        await session.load()
+        for _ in 0..<2 {
+            await session.turn(forward: true)
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        await session.flush()
+        var checkpoint = try XCTUnwrap(store.book(book.id))
+        let saved = try XCTUnwrap(checkpoint.position)
+        XCTAssertGreaterThan(saved.progression, 0)
+        checkpoint.pendingSync = false; try store.save(checkpoint)
+        let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        XCTAssertTrue(session.supportsScrolling)
+        for layout in [ReadingLayout.scroll, .paginated, .scroll] {
+            var settings = store.settings; settings.reader.layout = layout; try store.saveSettings(settings)
+            session.updatePreferences()
+            XCTAssertTrue(session.isRestoring)
+            for _ in 0..<50 {
+                if !session.isRestoring { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertFalse(session.isRestoring)
+            XCTAssertNil(session.recoveryError)
+            XCTAssertEqual(navigator.settings.scroll, layout == .scroll)
+            if layout == .scroll {
+                XCTAssertEqual(navigator.settings.columnCount, .one)
+                XCTAssertFalse(session.container.canTurnPage?() ?? true)
+            }
+            let visible = try await readingAnchorIsVisible(XCTUnwrap(saved.xpointer), in: navigator)
+            XCTAssertTrue(visible, "Switching layouts must keep the original text in view")
+            await session.flush()
+            XCTAssertEqual(store.book(book.id)?.position, saved)
+            XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
+        }
+        await session.close()
     }
 }

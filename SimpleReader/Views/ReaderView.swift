@@ -36,11 +36,15 @@ struct ReaderView: View {
                     }
                 if let warning = session.bridgeWarning { Text(warning).font(.caption).foregroundColor(.orange).padding(8) }
                 HStack {
-                    Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一页")
+                    if !session.isScrolling {
+                        Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一页")
+                    }
                     Spacer()
                     VStack(spacing: 3) { Text("\(Int(session.progression*100))%").font(.caption.monospacedDigit()); Text(session.syncMessage ?? sync.status).font(.caption2).foregroundColor(.secondary).lineLimit(1) }
                     Spacer()
-                    Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下一页")
+                    if !session.isScrolling {
+                        Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下一页")
+                    }
                 }.padding(.horizontal, 24).padding(.vertical, 10).background(Color(UIColor.secondarySystemBackground))
             }
             .navigationTitle(session.title).navigationBarTitleDisplayMode(.inline)
@@ -48,7 +52,7 @@ struct ReaderView: View {
                 ToolbarItem(placement: .navigationBarLeading) { Button("完成") { closing = true; Task { await session.close(); dismiss() } }.disabled(closing) }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button { showContents = true } label: { Image(systemName: "list.bullet") }.accessibilityLabel("目录").disabled(!session.ready)
-                    if store.book(session.bookID)?.format == .epub { Button { showPreferences = true } label: { Image(systemName: "textformat.size") }.accessibilityLabel("阅读设置") }
+                    if store.book(session.bookID)?.format == .epub { Button { showPreferences = true } label: { Image(systemName: "textformat.size") }.accessibilityLabel("阅读设置").disabled(!session.ready) }
                     Button { Task { await session.synchronize(userInitiated: true) } } label: { Image(systemName: "arrow.triangle.2.circlepath") }.accessibilityLabel("同步进度")
                 }
             }
@@ -65,7 +69,7 @@ struct ReaderView: View {
         .sheet(isPresented: $showContents) {
             ReaderContentsView(session: session)
         }
-        .sheet(isPresented: $showPreferences) { ReaderPreferencesView(store: store, onChange: { session.updatePreferences() }) }
+        .sheet(isPresented: $showPreferences) { ReaderPreferencesView(store: store, supportsScrolling: session.supportsScrolling, onChange: { session.updatePreferences() }) }
         .alert(item: $session.prompt) { prompt in
             let percentage = Int((prompt.remote.percentage ?? 0)*100)
             switch prompt.kind {
@@ -138,12 +142,21 @@ private struct ReaderContentsView: View {
 }
 struct ReaderPreferencesView: View {
     @ObservedObject var store: LibraryStore
+    var supportsScrolling = true
     let onChange: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
     var body: some View {
         NavigationView {
             Form {
+                if supportsScrolling {
+                    Section(header: Text("阅读方式")) {
+                        Picker("阅读方式", selection: Binding(get: { store.settings.reader.layout }, set: { value in save { $0.layout = value } })) {
+                            Text("分页").tag(ReadingLayout.paginated)
+                            Text("连续滚动").tag(ReadingLayout.scroll)
+                        }.pickerStyle(.segmented)
+                    }
+                }
                 Section(header: Text("字号")) {
                     Slider(value: Binding(get: { store.settings.reader.fontSize }, set: { value in save { $0.fontSize = value } }), in: 80...200, step: 10)
                     Text("\(Int(store.settings.reader.fontSize))%")

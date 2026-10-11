@@ -20,6 +20,7 @@ struct SyncPrompt: Identifiable {
     let bookID: UUID
     let container = ReaderContainerController()
     @Published var ready = false
+    @Published private(set) var supportsScrolling = false
     @Published private(set) var isRestoring = false
     @Published private(set) var recoveryError: String?
     @Published var error: String?
@@ -89,6 +90,7 @@ struct SyncPrompt: Identifiable {
         EPUBPositionBridge.installMediaLayout(in: controller)
     }
     var title: String { store.book(bookID)?.title ?? "阅读" }
+    var isScrolling: Bool { supportsScrolling && store.settings.reader.layout == .scroll }
     var progressLabel: String {
         if let document = pdf?.document, let page = pdf?.currentPage {
             return "第 \(document.index(for: page) + 1) / \(document.pageCount) 页"
@@ -259,7 +261,8 @@ struct SyncPrompt: Identifiable {
         case "dark": theme = .dark
         default: theme = container.traitCollection.userInterfaceStyle == .dark ? .dark : .light
         }
-        return EPUBPreferences(columnCount: displaysTwoPages ? .two : .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, spread: displaysTwoPages ? .always : .never, theme: theme)
+        let twoPages = displaysTwoPages && !isScrolling
+        return EPUBPreferences(columnCount: twoPages ? .two : .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, scroll: isScrolling, spread: twoPages ? .always : .never, theme: theme)
     }
     private func updatePageLayout(size: CGSize, idiom: UIUserInterfaceIdiom) {
         let twoPages = ReaderPageLayout.displaysTwoPages(size: size, idiom: idiom)
@@ -285,6 +288,7 @@ struct SyncPrompt: Identifiable {
         scheduleRestoration()
     }
     private func installNavigator(publication: Publication, locator: Locator?) throws {
+        supportsScrolling = publication.metadata.layout != .fixed
         let navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: locator,
             config: .init(preferences: preferences(), fontFamilyDeclarations: try ReaderFonts.declarations()))
         epub?.delegate = nil
@@ -298,6 +302,7 @@ struct SyncPrompt: Identifiable {
         }
     }
     private func protectPosition() {
+        container.cancelPageTransition()
         guard ready, !closed else { return }
         restorationRevision += 1; restoration?.cancel()
         navigationRevision += 1
@@ -458,6 +463,7 @@ struct SyncPrompt: Identifiable {
         else { pdfChanged() }
     }
     func close() async {
+        container.cancelPageTransition()
         await flush()
         closed = true
         restorationRevision += 1; restoration?.cancel()
@@ -491,25 +497,26 @@ struct SyncPrompt: Identifiable {
         turningPage = true
         defer { turningPage = false }
         navigationRevision += 1
-        let animated = !UIAccessibility.isReduceMotionEnabled
         if let epub = epub {
-            let options = NavigatorGoOptions(animated: animated)
-            if forward { await epub.goForward(options: options) }
-            else { await epub.goBackward(options: options) }
+            if epub.settings.scroll {
+                let options = NavigatorGoOptions(animated: !UIAccessibility.isReduceMotionEnabled)
+                if forward { _ = await epub.goForward(options: options) }
+                else { _ = await epub.goBackward(options: options) }
+                return
+            }
+            let direction: CGFloat = forward == (epub.presentation.readingProgression == .ltr) ? 1 : -1
+            await container.animatePageTurn(direction: direction) {
+                let options = NavigatorGoOptions(animated: false)
+                if forward { return await epub.goForward(options: options) }
+                return await epub.goBackward(options: options)
+            }
         }
         else if let pdf = pdf, let doc = pdf.document, let page = pdf.currentPage {
             let index = ReaderPageLayout.nextPDFPage(current: doc.index(for: page), forward: forward, twoPages: displaysTwoPages)
             guard let target = doc.page(at: index) else { return }
-            if animated {
-                await withCheckedContinuation { continuation in
-                    UIView.transition(with: pdf, duration: 0.25, options: [.transitionCrossDissolve, .curveEaseInOut], animations: {
-                        pdf.go(to: target)
-                    }, completion: { _ in
-                        continuation.resume()
-                    })
-                }
-            } else {
+            await container.animatePageTurn(direction: forward ? 1 : -1) {
                 pdf.go(to: target)
+                return true
             }
         }
     }
@@ -667,6 +674,10 @@ private final class ReaderContainerView: UIView {
     private var layoutSize: CGSize = .zero
     private var layoutChanged = false
     private var transitioning = false
+    private var pageTransitionRevision = 0
+    private var pageAnimator: UIViewPropertyAnimator?
+    private var pageSnapshot: UIView?
+    private var pageContent: UIView?
     var onLayout: ((CGSize, UIUserInterfaceIdiom) -> Void)?
     var onLayoutWillChange: (() -> Void)?
     var onLayoutDidChange: (() -> Void)?
@@ -688,6 +699,7 @@ private final class ReaderContainerView: UIView {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.clipsToBounds = true
         if #available(iOS 17.0, *) {
             registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: ReaderContainerController, _: UITraitCollection) in
                 controller.onAppearanceChange?()
@@ -710,7 +722,7 @@ private final class ReaderContainerView: UIView {
     }
 
     func beginPageTurn(translation: CGPoint) -> Bool {
-        guard canTurnPage?() == true, abs(translation.x) > abs(translation.y) else { return false }
+        guard pageSnapshot == nil, canTurnPage?() == true, abs(translation.x) > abs(translation.y) else { return false }
         isPageTurnGestureActive = true
         // Readium reports location only after scrolling settles. Invalidate an
         // in-flight sync now, before it can restore a distant remote position.
@@ -728,7 +740,7 @@ private final class ReaderContainerView: UIView {
     @objc func handlePageTurn(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .ended:
-            finishPageTurn(translation: gesture.translation(in: view))
+            finishPageTurn(translation: gesture.translation(in: view), velocity: gesture.velocity(in: view))
         case .cancelled, .failed:
             isPageTurnGestureActive = false
         default:
@@ -736,9 +748,69 @@ private final class ReaderContainerView: UIView {
         }
     }
 
-    func finishPageTurn(translation: CGPoint) {
+    func finishPageTurn(translation: CGPoint, velocity: CGPoint = .zero) {
         isPageTurnGestureActive = false
-        if abs(translation.x) >= 32 { onPageTurn?(translation.x < 0) }
+        let projected = translation.x + velocity.x * 0.12
+        guard translation.x * projected > 0 else { return }
+        let crossedThreshold = abs(projected) >= max(32, view.bounds.width * 0.2)
+        let quickSwipe = abs(translation.x) >= 8 && abs(velocity.x) >= 450
+        if crossedThreshold || quickSwipe { onPageTurn?(projected < 0) }
+    }
+
+    func cancelPageTransition() {
+        pageTransitionRevision += 1
+        let animator = pageAnimator
+        pageAnimator = nil
+        if animator?.state == .active {
+            animator?.stopAnimation(false)
+            animator?.finishAnimation(at: .current)
+        }
+        pageSnapshot?.removeFromSuperview()
+        pageContent?.transform = .identity
+        pageSnapshot = nil
+        pageContent = nil
+    }
+
+    func animatePageTurn(direction: CGFloat, navigate: () async -> Bool) async {
+        guard !UIAccessibility.isReduceMotionEnabled,
+              let content = children.first?.view ?? view.subviews.first(where: { $0 is PDFView }),
+              view.window != nil, view.bounds.width > 0,
+              let snapshot = content.snapshotView(afterScreenUpdates: false) else {
+            _ = await navigate()
+            return
+        }
+        cancelPageTransition()
+        let revision = pageTransitionRevision
+        let size = view.bounds.size
+        snapshot.frame = content.convert(content.bounds, to: view)
+        snapshot.isUserInteractionEnabled = true
+        view.addSubview(snapshot)
+        pageSnapshot = snapshot
+        pageContent = content
+        defer {
+            if revision == pageTransitionRevision { cancelPageTransition() }
+            snapshot.removeFromSuperview()
+        }
+
+        // Navigation owns chapter loading and locators; animate only our views
+        // once Readium has finished its non-animated navigation.
+        let moved = await navigate()
+        guard moved, revision == pageTransitionRevision, content.superview === view,
+              view.window != nil, view.bounds.size == size else { return }
+        view.layoutIfNeeded()
+        guard revision == pageTransitionRevision else { return }
+        content.transform = CGAffineTransform(translationX: direction * size.width, y: 0)
+        let timing = UICubicTimingParameters(controlPoint1: CGPoint(x: 0.22, y: 1), controlPoint2: CGPoint(x: 0.36, y: 1))
+        let animator = UIViewPropertyAnimator(duration: 0.28, timingParameters: timing)
+        pageAnimator = animator
+        animator.addAnimations {
+            content.transform = .identity
+            snapshot.transform = CGAffineTransform(translationX: -direction * size.width, y: 0)
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            animator.addCompletion { _ in continuation.resume() }
+            animator.startAnimation()
+        }
     }
 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
@@ -771,10 +843,12 @@ private final class ReaderContainerView: UIView {
         appeared = true
     }
     override func viewWillDisappear(_ animated: Bool) {
+        cancelPageTransition()
         appeared = false
         super.viewWillDisappear(animated)
     }
     func replaceChild(with child: UIViewController) {
+        cancelPageTransition()
         for previous in children {
             previous.willMove(toParent: nil)
             if appeared { previous.beginAppearanceTransition(false, animated: false) }
