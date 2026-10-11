@@ -1,6 +1,7 @@
 import XCTest
 import WebKit
 import PDFKit
+import SwiftUI
 import ReadiumShared
 import ReadiumNavigator
 @testable import SimpleReader
@@ -390,7 +391,9 @@ private final class ReaderSyncStub: ProgressSyncClient {
         let window = UIWindow(windowScene: scene), host = UIViewController()
         window.rootViewController = host; window.makeKeyAndVisible()
         host.addChild(session.container); host.view.addSubview(session.container.view)
-        session.container.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        session.container.view.frame = UIDevice.current.userInterfaceIdiom == .pad
+            ? CGRect(x: 0, y: 0, width: 1000, height: 650)
+            : CGRect(x: 0, y: 0, width: 390, height: 700)
         session.container.didMove(toParent: host)
         defer { window.isHidden = true }
         await session.load()
@@ -404,6 +407,7 @@ private final class ReaderSyncStub: ProgressSyncClient {
         // Readium can publish the initial locator before enabling page navigation.
         try await Task.sleep(nanoseconds: 700_000_000)
         let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        if UIDevice.current.userInterfaceIdiom == .pad { XCTAssertEqual(navigator.settings.columnCount, .two) }
         let initial = try XCTUnwrap(navigator.currentLocation)
         await session.turn(forward: true)
         try await Task.sleep(nanoseconds: 700_000_000)
@@ -417,15 +421,37 @@ private final class ReaderSyncStub: ProgressSyncClient {
         let pan = try XCTUnwrap(container.view.gestureRecognizers?.compactMap { $0 as? UIPanGestureRecognizer }.first)
         XCTAssertFalse(container.beginPageTurn(translation: CGPoint(x: 3, y: 60)), "Vertical gestures are not page turns")
         XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -300, y: 3)))
+        func visiblePage(in view: UIView) -> WKWebView? {
+            guard !view.isHidden, view.alpha > 0.99 else { return nil }
+            if let web = view as? WKWebView {
+                let rect = web.convert(web.bounds, to: container.view).intersection(container.view.bounds)
+                return rect.width > container.view.bounds.width / 2 ? web : nil
+            }
+            return view.subviews.lazy.compactMap { visiblePage(in: $0) }.first
+        }
+        let web = try XCTUnwrap(visiblePage(in: navigator.view))
+        let originalOffset = web.scrollView.contentOffset
+        let savedBeforeDrag = store.book(book.id)?.position
+        container.updatePageTurn(translation: CGPoint(x: -web.bounds.width * 0.35, y: 0))
+        XCTAssertEqual(web.scrollView.contentOffset.x, originalOffset.x + web.bounds.width * 0.35, accuracy: 1,
+                       "Dragging must reveal the real adjacent page before release")
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(store.book(book.id)?.position, savedBeforeDrag, "An uncommitted page preview must not be persisted")
+        container.finishPageTurn(translation: CGPoint(x: -20, y: 0), velocity: CGPoint(x: 900, y: 0))
+        try await Task.sleep(nanoseconds: 700_000_000)
+        XCTAssertEqual(web.scrollView.contentOffset.x, originalOffset.x, accuracy: 1,
+                       "Reversing the drag returns to its original page")
+        XCTAssertEqual(navigator.currentLocation?.locations.progression, initial.locations.progression)
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -300, y: 3)))
         func checkScrollViews(_ view: UIView) -> Int {
             var count = 0
             if let scroll = view as? UIScrollView {
-                XCTAssertTrue(container.gestureRecognizer(pan, shouldBeRequiredToFailBy: scroll.panGestureRecognizer))
+                XCTAssertFalse(container.gestureRecognizer(pan, shouldBeRequiredToFailBy: scroll.panGestureRecognizer), "The reader pan owns horizontal pagination")
                 count += 1
             }
             return count + view.subviews.reduce(0) { $0 + checkScrollViews($1) }
         }
-        XCTAssertGreaterThan(checkScrollViews(navigator.view), 1, "Both chapter and WebView pans must yield")
+        XCTAssertGreaterThan(checkScrollViews(navigator.view), 1, "Both chapter and WebView pans use the same page-turn owner")
         container.finishPageTurn(translation: CGPoint(x: -1200, y: 0))
         try await Task.sleep(nanoseconds: 700_000_000)
         XCTAssertEqual(navigator.currentLocation?.href, next.href)
@@ -464,6 +490,98 @@ private final class ReaderSyncStub: ProgressSyncClient {
         XCTAssertEqual(turns, [true], "Reversing a drag must cancel instead of turning the opposite page")
         container.finishPageTurn(translation: CGPoint(x: 1000, y: 0))
         XCTAssertEqual(turns, [true, false], "Even a long drag navigates only once")
+    }
+
+    func testQuickSwipeSurvivesImmediateBackgroundAndChapterPreviewsCommitOnce() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene), host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(session.container); host.view.addSubview(session.container.view)
+        session.container.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        session.container.didMove(toParent: host)
+        defer { window.isHidden = true }
+        await session.load()
+        session.container.view.layoutIfNeeded()
+        for _ in 0..<50 {
+            if !session.isRestoring { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        try await Task.sleep(nanoseconds: 700_000_000)
+        let container = session.container
+        var navigator = try XCTUnwrap(container.children.first as? EPUBNavigatorViewController)
+        let initialPointer = store.book(book.id)?.position?.xpointer
+        func waitForGesture() async throws {
+            for _ in 0..<150 {
+                if !container.isPageTurnGestureActive { return }
+                try await Task.sleep(nanoseconds: 16_000_000)
+            }
+            XCTFail("The page gesture must settle before another navigation")
+        }
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -12, y: 0)))
+        container.updatePageTurn(translation: CGPoint(x: -12, y: 0))
+        container.finishPageTurn(translation: CGPoint(x: -12, y: 0), velocity: CGPoint(x: -1200, y: 0))
+        try await waitForGesture()
+        let committed = try XCTUnwrap(store.book(book.id)?.position)
+        XCTAssertNotEqual(committed.xpointer, initialPointer, "A quick swipe commits a new text anchor before becoming idle")
+        XCTAssertGreaterThan(committed.progression, 0)
+        // Do not wait for Readium's delayed location notification here.
+        await session.background()
+        await session.foreground()
+        XCTAssertNil(session.recoveryError)
+        navigator = try XCTUnwrap(container.children.first as? EPUBNavigatorViewController)
+        let restored = try await EPUBPositionBridge.capture(navigator: navigator, locator: XCTUnwrap(navigator.currentLocation))
+        XCTAssertEqual(restored, committed.xpointer, "Immediate backgrounding must keep the committed page's first text")
+
+        let firstLink = navigator.publication.readingOrder[0]
+        let firstLocation = await navigator.publication.locate(firstLink)
+        let lastPage = try XCTUnwrap(firstLocation).copy(locations: { $0.progression = 0.99 })
+        let reachedLastPage = await navigator.go(to: lastPage, options: .init(animated: false))
+        XCTAssertTrue(reachedLastPage)
+        try await container.waitForEPUBContent()
+        try await Task.sleep(nanoseconds: 700_000_000)
+        let lastHref = try XCTUnwrap(navigator.currentLocation?.href)
+        let nextHref = navigator.publication.readingOrder[1].url()
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -140, y: 0)))
+        container.updatePageTurn(translation: CGPoint(x: -140, y: 0))
+        try await Task.sleep(nanoseconds: 350_000_000)
+        XCTAssertEqual(navigator.currentLocation?.href, lastHref, "A neighboring chapter preview cannot change the selected chapter")
+        container.finishPageTurn(translation: CGPoint(x: -20, y: 0), velocity: CGPoint(x: 800, y: 0))
+        try await waitForGesture()
+        XCTAssertEqual(navigator.currentLocation?.href, lastHref)
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -140, y: 0)))
+        container.updatePageTurn(translation: CGPoint(x: -140, y: 0))
+        container.finishPageTurn(translation: CGPoint(x: -140, y: 0), velocity: CGPoint(x: -900, y: 0))
+        try await waitForGesture()
+        for _ in 0..<60 {
+            if navigator.currentLocation?.href == nextHref { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(navigator.currentLocation?.href, nextHref)
+        XCTAssertLessThan(navigator.currentLocation?.locations.progression ?? 1, 0.1,
+                          "Crossing the chapter boundary must land on its first page")
+        var began = false
+        for _ in 0..<60 {
+            if container.beginPageTurn(translation: CGPoint(x: 140, y: 0)) { began = true; break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(began)
+        container.updatePageTurn(translation: CGPoint(x: 140, y: 0))
+        container.finishPageTurn(translation: CGPoint(x: 140, y: 0), velocity: CGPoint(x: 900, y: 0))
+        try await waitForGesture()
+        for _ in 0..<60 {
+            if navigator.currentLocation?.href == lastHref { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(navigator.currentLocation?.href, lastHref)
+        XCTAssertGreaterThan(navigator.currentLocation?.locations.progression ?? 0, 0.5,
+                             "Moving back across the boundary must land on the prior chapter's final page")
+        await session.close()
     }
 
     func testCancellingActivePageAnimationRestoresContent() async throws {
@@ -1092,6 +1210,80 @@ private final class ReaderSyncStub: ProgressSyncClient {
         XCTAssertEqual(captured, pointer)
         XCTAssertNil(session.error)
         await session.close()
+    }
+
+    func testImmersiveControlsDoNotResizeHostedReaderOrChangeProgress() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for layout in [ReadingLayout.paginated, .scroll] {
+            let store = try LibraryStore(root: root.appendingPathComponent(layout.rawValue), inMemory: true)
+            let readium = ReadiumService(), sync = SyncCoordinator(store: store, http: HTTPClient())
+            var settings = store.settings; settings.reader.layout = layout; try store.saveSettings(settings)
+            let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+            let session = ReaderSession(bookID: book.id, store: store, readium: readium, sync: sync)
+            session.toggleControls()
+            XCTAssertTrue(session.controlsVisible, "Loading controls must remain accessible")
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            let host = UIHostingController(rootView: ReaderView(session: session, store: store, sync: sync))
+            window.rootViewController = host; window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            for _ in 0..<300 {
+                if session.ready && !session.isRestoring { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            XCTAssertTrue(session.ready)
+            await session.go(try XCTUnwrap(session.contents.last))
+            try await Task.sleep(nanoseconds: 600_000_000)
+            await session.flush()
+            let navigator = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
+            let position = try XCTUnwrap(store.book(book.id)?.position)
+            let viewport = session.container.view.bounds
+            let location = navigator.currentLocation
+            let pointer = try XCTUnwrap(position.xpointer)
+            let anchorScript = """
+            (() => {
+              const anchor=SimpleReaderBridge.resolve(\(try EPUBPositionBridge.quoted(pointer)));
+              const element=document.querySelector(anchor.cssSelector);
+              const node=element.childNodes[anchor.textNodeIndex] || element;
+              const range=document.createRange();
+              if(node.nodeType===Node.TEXT_NODE) {range.setStart(node,anchor.textOffset);range.setEnd(node,Math.min(node.length,anchor.textOffset+1));}
+              else range.selectNode(node);
+              const rect=range.getBoundingClientRect();return JSON.stringify([rect.x,rect.y]);
+            })();
+            """
+            _ = try await navigator.evaluateJavaScript(try EPUBPositionBridge.source).get()
+            let beforeResult = try await navigator.evaluateJavaScript(anchorScript).get()
+            let glyphBefore = try XCTUnwrap(beforeResult as? String)
+            if let epub = navigator as? EPUBNavigatorViewController {
+                session.navigator(epub, didTapAt: CGPoint(x: 5, y: 100))
+                XCTAssertTrue(session.controlsVisible, "Edge gestures must not toggle controls")
+                session.navigator(epub, didTapAt: CGPoint(x: viewport.midX, y: viewport.midY))
+            } else {
+                _ = try await navigator.evaluateJavaScript("const button=document.createElement('button');button.dataset.simpleReaderInert='';document.body.append(button);button.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1,clientX:innerWidth/2,clientY:20}));button.remove();true").get()
+                try await Task.sleep(nanoseconds: 350_000_000)
+                XCTAssertTrue(session.controlsVisible, "Interactive content must keep its own tap behavior")
+                _ = try await navigator.evaluateJavaScript("document.body.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1,clientX:innerWidth/2,clientY:20}));true").get()
+            }
+            try await Task.sleep(nanoseconds: 400_000_000)
+            XCTAssertFalse(session.controlsVisible)
+            host.view.layoutIfNeeded()
+            XCTAssertEqual(session.container.view.bounds, viewport, "Hiding overlays must not reflow the reading surface")
+            XCTAssertEqual(navigator.currentLocation, location)
+            let glyphAfter = try await navigator.evaluateJavaScript(anchorScript).get() as? String
+            XCTAssertEqual(glyphAfter, glyphBefore, "The same glyph must stay at the same screen position")
+            await session.flush()
+            XCTAssertEqual(store.book(book.id)?.position, position)
+            session.toggleControls()
+            try await Task.sleep(nanoseconds: 250_000_000)
+            XCTAssertTrue(session.controlsVisible)
+            XCTAssertEqual(session.container.view.bounds, viewport)
+            session.resignActive()
+            let visibility = session.controlsVisible
+            session.toggleControls()
+            XCTAssertEqual(session.controlsVisible, visibility, "Recovery must not change control visibility")
+            await session.close()
+        }
     }
 
     func testReadingLayoutSwitchPreservesAnchorWithoutCreatingUpload() async throws {

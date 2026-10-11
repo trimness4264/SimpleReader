@@ -50,19 +50,36 @@ struct OPDSServer: Identifiable, Codable, Equatable {
 enum ReadingLayout: String, Codable {
     case paginated, scroll
 }
+enum ReaderFont: String, Codable {
+    case serif, system
+
+    var familyName: String { self == .serif ? "Source Serif 4" : "-apple-system" }
+    var cssStack: String {
+        switch self {
+        case .serif: return "'Source Serif 4', 'LXGW WenKai', serif"
+        case .system: return "-apple-system, 'PingFang SC', 'Hiragino Sans GB', sans-serif"
+        }
+    }
+}
 struct ReaderSettings: Codable {
     var fontSize: Double = 110
     var theme = "system"
     var layout: ReadingLayout = .paginated
+    var font: ReaderFont = .serif
+    var lineHeight: Double = 1.65
+    var pageMargins: Double = 1.0
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case fontSize, theme, layout }
+    private enum CodingKeys: String, CodingKey { case fontSize, theme, layout, font, lineHeight, pageMargins }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         fontSize = try values.decodeIfPresent(Double.self, forKey: .fontSize) ?? 110
         theme = try values.decodeIfPresent(String.self, forKey: .theme) ?? "system"
         layout = try values.decodeIfPresent(ReadingLayout.self, forKey: .layout) ?? .paginated
+        font = try values.decodeIfPresent(ReaderFont.self, forKey: .font) ?? .serif
+        lineHeight = try values.decodeIfPresent(Double.self, forKey: .lineHeight) ?? 1.65
+        pageMargins = try values.decodeIfPresent(Double.self, forKey: .pageMargins) ?? 1.0
     }
 }
 struct SyncSettings: Codable {

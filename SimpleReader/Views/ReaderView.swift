@@ -14,49 +14,53 @@ struct ReaderView: View {
     @State private var showContents = false
     @State private var showPreferences = false
     @State private var closing = false
+    @State private var showSyncStatus = false
+    @AppStorage("reader.showPageButtons") private var showPageButtons = false
+    @AppStorage("reader.showProgress") private var showProgress = true
+    @AppStorage("reader.didShowControlsHint") private var didShowControlsHint = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     init(bookID: UUID, environment: AppEnvironment) {
-        store = environment.store; sync = environment.sync
-        _session = StateObject(wrappedValue: ReaderSession(bookID: bookID, store: environment.store, readium: environment.readium, sync: environment.sync))
+        self.init(session: ReaderSession(bookID: bookID, store: environment.store, readium: environment.readium, sync: environment.sync), store: environment.store, sync: environment.sync)
+    }
+    init(session: ReaderSession, store: LibraryStore, sync: SyncCoordinator) {
+        self.store = store; self.sync = sync
+        _session = StateObject(wrappedValue: session)
     }
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                ReaderSurface(session: session)
-                    .overlay {
-                        if let error = session.recoveryError {
-                            VStack(spacing: 12) {
-                                Text(error)
-                                Button("重新加载正文") { Task { await session.retryRecovery() } }
-                            }.padding().background(Color(UIColor.systemBackground))
-                        } else if session.isRestoring {
-                            ProgressView("正在恢复阅读位置…")
-                        } else if !session.ready && session.error == nil {
-                            ProgressView("正在打开…")
-                        }
-                    }
-                if let warning = session.bridgeWarning { Text(warning).font(.caption).foregroundColor(.orange).padding(8) }
-                HStack {
-                    if !session.isScrolling {
-                        Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一页")
-                    }
-                    Spacer()
-                    VStack(spacing: 3) { Text("\(Int(session.progression*100))%").font(.caption.monospacedDigit()); Text(session.syncMessage ?? sync.status).font(.caption2).foregroundColor(.secondary).lineLimit(1) }
-                    Spacer()
-                    if !session.isScrolling {
-                        Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下一页")
-                    }
-                }.padding(.horizontal, 24).padding(.vertical, 10).background(Color(UIColor.secondarySystemBackground))
+        ReaderSurface(session: session)
+        .overlay {
+            if let error = session.recoveryError {
+                VStack(spacing: 12) {
+                    Text(error)
+                    Button("重新加载正文") { Task { await session.retryRecovery() } }
+                }.padding().background(Color(UIColor.systemBackground))
+            } else if session.isRestoring {
+                ProgressView("正在恢复阅读位置…")
+            } else if !session.ready && session.error == nil {
+                ProgressView("正在打开…")
             }
-            .navigationTitle(session.title).navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("完成") { closing = true; Task { await session.close(); dismiss() } }.disabled(closing) }
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button { showContents = true } label: { Image(systemName: "list.bullet") }.accessibilityLabel("目录").disabled(!session.ready)
-                    if store.book(session.bookID)?.format == .epub { Button { showPreferences = true } label: { Image(systemName: "textformat.size") }.accessibilityLabel("阅读设置").disabled(!session.ready) }
-                    Button { Task { await session.synchronize(userInitiated: true) } } label: { Image(systemName: "arrow.triangle.2.circlepath") }.accessibilityLabel("同步进度")
+        }
+        .accessibilityAction(named: Text("显示或隐藏阅读操作栏")) { session.toggleControls() }
+        .overlay(alignment: .top) { if session.controlsVisible { topControls.transition(.opacity) } }
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 4) {
+                if let message = session.syncMessage, message.hasPrefix("同步失败") {
+                    Button { showSyncStatus = true } label: {
+                        Label("同步失败，点击查看", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                            .font(.caption).padding(12).background(.regularMaterial, in: Capsule())
+                    }
+                }
+                if session.controlsVisible { bottomControls.transition(.opacity) }
+                else if showProgress {
+                    Button { session.toggleControls() } label: {
+                        Text(session.progressLabel).font(.caption.monospacedDigit())
+                            .padding(.horizontal, 12).frame(minHeight: 44).background(.regularMaterial, in: Capsule())
+                    }.accessibilityLabel("\(session.progressLabel)，显示阅读操作栏")
                 }
             }
-        }.navigationViewStyle(.stack)
+        }
+        .preferredColorScheme(store.settings.reader.theme == "dark" ? .dark : store.settings.reader.theme == "light" ? .light : nil)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: session.controlsVisible)
         .task { await session.load() }
         .onChange(of: phase) { value in
             switch value {
@@ -69,7 +73,6 @@ struct ReaderView: View {
         .sheet(isPresented: $showContents) {
             ReaderContentsView(session: session)
         }
-        .sheet(isPresented: $showPreferences) { ReaderPreferencesView(store: store, supportsScrolling: session.supportsScrolling, onChange: { session.updatePreferences() }) }
         .alert(item: $session.prompt) { prompt in
             let percentage = Int((prompt.remote.percentage ?? 0)*100)
             switch prompt.kind {
@@ -80,6 +83,70 @@ struct ReaderView: View {
             }
         }
         .errorAlert($session.error)
+        .alert("同步失败", isPresented: $showSyncStatus) {
+            Button("重试") { Task { await session.synchronize(userInitiated: true) } }
+            Button("关闭", role: .cancel) {}
+        } message: { Text(session.syncMessage ?? sync.status) }
+    }
+
+    private var topControls: some View {
+        HStack(spacing: 12) {
+            Button {
+                closing = true
+                Task { await session.close(); dismiss() }
+            } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }
+                .accessibilityLabel("返回书库").disabled(closing)
+            Text(session.title).font(.headline).lineLimit(1).frame(maxWidth: .infinity)
+            Menu {
+                Text(session.syncMessage ?? sync.status)
+                Button {
+                    Task { await session.synchronize(userInitiated: true) }
+                } label: { Label("同步进度", systemImage: "arrow.triangle.2.circlepath") }
+                Toggle("显示细小进度", isOn: $showProgress)
+                if !session.isScrolling { Toggle("显示翻页按钮", isOn: $showPageButtons) }
+                if let warning = session.bridgeWarning { Text(warning) }
+            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+                .accessibilityLabel("更多阅读选项")
+        }.padding(.horizontal, 8).background(.regularMaterial)
+    }
+
+    private var bottomControls: some View {
+        VStack(spacing: 8) {
+            if !didShowControlsHint && session.ready {
+                HStack {
+                    Text("点击正文中央收起或显示操作栏").font(.caption)
+                    Button("知道了") { didShowControlsHint = true }.font(.caption)
+                }
+            }
+            Text(session.progressLabel).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+            HStack {
+                Button { showContents = true } label: { Label("目录", systemImage: "list.bullet").frame(minHeight: 44) }
+                    .disabled(!session.ready)
+                Spacer()
+                if showPageButtons && !session.isScrolling {
+                    Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("上一页")
+                    Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }.accessibilityLabel("下一页")
+                    Spacer()
+                }
+                if store.book(session.bookID)?.format == .epub {
+                    Button { showPreferences = true } label: { Label("设置", systemImage: "textformat.size").frame(minHeight: 44) }
+                        .accessibilityLabel("阅读设置").disabled(!session.ready)
+                        .popover(isPresented: $showPreferences) { preferencesPanel }
+                }
+                Button { session.toggleControls() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }
+                    .accessibilityLabel("收起阅读操作栏")
+            }
+        }.padding(.horizontal, 16).padding(.top, 10).background(.regularMaterial)
+    }
+
+    @ViewBuilder private var preferencesPanel: some View {
+        if #available(iOS 16.0, *) {
+            ReaderPreferencesView(store: store, supportsScrolling: session.supportsScrolling, onChange: { session.updatePreferences() })
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        } else {
+            ReaderPreferencesView(store: store, supportsScrolling: session.supportsScrolling, onChange: { session.updatePreferences() })
+        }
     }
 }
 private struct ReaderContentsView: View {
@@ -156,15 +223,33 @@ struct ReaderPreferencesView: View {
                             Text("连续滚动").tag(ReadingLayout.scroll)
                         }.pickerStyle(.segmented)
                     }
-                }
-                Section(header: Text("字号")) {
-                    Slider(value: Binding(get: { store.settings.reader.fontSize }, set: { value in save { $0.fontSize = value } }), in: 80...200, step: 10)
-                    Text("\(Int(store.settings.reader.fontSize))%")
+                    Section(header: Text("字体与排版")) {
+                        Picker("字体", selection: Binding(get: { store.settings.reader.font }, set: { value in save { $0.font = value } })) {
+                            Text("书籍衬线").tag(ReaderFont.serif)
+                            Text("系统无衬线").tag(ReaderFont.system)
+                        }
+                        VStack(alignment: .leading) {
+                            Text("字号 \(Int(store.settings.reader.fontSize))%")
+                            Slider(value: Binding(get: { store.settings.reader.fontSize }, set: { value in save { $0.fontSize = value } }), in: 80...200, step: 10)
+                                .accessibilityLabel("字号")
+                        }
+                        VStack(alignment: .leading) {
+                            Text("行距 \(store.settings.reader.lineHeight, specifier: "%.2f") 倍")
+                            Slider(value: Binding(get: { store.settings.reader.lineHeight }, set: { value in save { $0.lineHeight = value } }), in: 1.2...2.0, step: 0.05)
+                                .accessibilityLabel("行距")
+                        }
+                        VStack(alignment: .leading) {
+                            Text("页边距 \(store.settings.reader.pageMargins, specifier: "%.2f") 倍")
+                            Slider(value: Binding(get: { store.settings.reader.pageMargins }, set: { value in save { $0.pageMargins = value } }), in: 0.5...2.0, step: 0.25)
+                                .accessibilityLabel("页边距")
+                        }
+                    }
                 }
                 Picker("主题", selection: Binding(get: { store.settings.reader.theme }, set: { value in save { $0.theme = value } })) {
                     Text("跟随系统").tag("system"); Text("日间").tag("light"); Text("夜间").tag("dark")
                 }
-            }.navigationTitle("阅读设置").toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } } }
+            }.navigationTitle("阅读设置").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } } }
         }.navigationViewStyle(.stack).errorAlert($error)
     }
     private func save(_ change: (inout ReaderSettings) -> Void) {
