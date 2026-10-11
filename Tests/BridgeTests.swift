@@ -19,7 +19,7 @@ private final class ReaderSyncStub: ProgressSyncClient {
     func put(document: String, position: ReadingPosition, deviceID: String) async throws {
         if let failure = failure { throw failure }
         uploaded.append(position)
-        remote = RemoteProgress(document: document, progress: position.xpointer, percentage: position.progression, timestamp: Double(uploaded.count), device_id: deviceID)
+        remote = RemoteProgress(document: document, progress: position.pdfPage.map { String($0 + 1) } ?? position.xpointer, percentage: position.progression, timestamp: Double(uploaded.count), device_id: deviceID)
     }
 }
 
@@ -675,7 +675,8 @@ private final class ReaderSyncStub: ProgressSyncClient {
         }
         let readium = ReadiumService()
         let book = try await BookImportService(store: store, readium: readium).importBook(from: file)
-        let sync = SyncCoordinator(store: store, http: HTTPClient())
+        let client = ReaderSyncStub()
+        let sync = SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { client })
         let session = ReaderSession(bookID: book.id, store: store, readium: readium, sync: sync)
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first!
         let window = UIWindow(windowScene: scene); window.rootViewController = session.container; window.makeKeyAndVisible()
@@ -690,6 +691,41 @@ private final class ReaderSyncStub: ProgressSyncClient {
         await session.flush()
         XCTAssertTrue(store.book(book.id)!.pendingSync)
         XCTAssertEqual(store.book(book.id)!.position?.pdfPage, 1)
+        await session.close()
+        let saved = try XCTUnwrap(store.book(book.id)?.position)
+        let reopened = ReaderSession(bookID: book.id, store: store, readium: readium, sync: sync)
+        reopened.container.view.frame = .zero
+        let loading = Task { await reopened.load() }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        window.rootViewController = reopened.container
+        await loading.value
+        XCTAssertEqual(reopened.currentPDFPage, 2)
+        XCTAssertEqual(store.book(book.id)?.position, saved)
+        XCTAssertTrue(store.book(book.id)!.pendingSync)
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+        await reopened.synchronize()
+        XCTAssertEqual(client.uploaded, [saved])
+        XCTAssertEqual(client.remote?.progress, "2")
+        XCTAssertFalse(store.book(book.id)!.pendingSync)
+        XCTAssertNil(reopened.syncMessage)
+
+        client.remote = RemoteProgress(document: sync.document(book), progress: "3", percentage: 1,
+                                       timestamp: 10, device_id: "other-device")
+        await reopened.synchronize()
+        XCTAssertEqual(reopened.currentPDFPage, 3)
+        XCTAssertEqual(store.book(book.id)?.position?.pdfPage, 2)
+        XCTAssertEqual(store.book(book.id)?.remoteBaseline, client.remote?.fingerprint)
+        XCTAssertFalse(store.book(book.id)!.pendingSync)
+        await reopened.close()
+        let restoredRemote = ReaderSession(bookID: book.id, store: store, readium: readium, sync: sync)
+        window.rootViewController = restoredRemote.container
+        await restoredRemote.load()
+        XCTAssertEqual(restoredRemote.currentPDFPage, 3)
+        XCTAssertFalse(store.book(book.id)!.pendingSync)
+        XCTAssertEqual(client.uploaded.count, 1)
+        await restoredRemote.close()
     }
     func testImageOnlyEPUBLoadsSavesAndRestoresWithoutSyncAlerts() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -13,11 +13,11 @@ struct ReaderView: View {
     @Environment(\.scenePhase) private var phase
     @State private var showContents = false
     @State private var showPreferences = false
+    @State private var showPageJump = false
     @State private var closing = false
     @State private var showSyncStatus = false
     @AppStorage("reader.showPageButtons") private var showPageButtons = false
     @AppStorage("reader.showProgress") private var showProgress = true
-    @AppStorage("reader.didShowControlsHint") private var didShowControlsHint = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     init(bookID: UUID, environment: AppEnvironment) {
         self.init(session: ReaderSession(bookID: bookID, store: environment.store, readium: environment.readium, sync: environment.sync), store: environment.store, sync: environment.sync)
@@ -28,6 +28,7 @@ struct ReaderView: View {
     }
     var body: some View {
         ReaderSurface(session: session)
+        .ignoresSafeArea(.keyboard)
         .overlay {
             if let error = session.recoveryError {
                 VStack(spacing: 12) {
@@ -73,6 +74,7 @@ struct ReaderView: View {
         .sheet(isPresented: $showContents) {
             ReaderContentsView(session: session)
         }
+        .sheet(isPresented: $showPageJump) { PDFPageJumpView(session: session) }
         .alert(item: $session.prompt) { prompt in
             let percentage = Int((prompt.remote.percentage ?? 0)*100)
             switch prompt.kind {
@@ -97,6 +99,11 @@ struct ReaderView: View {
             } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }
                 .accessibilityLabel("返回书库").disabled(closing)
             Text(session.title).font(.headline).lineLimit(1).frame(maxWidth: .infinity)
+            if session.canReturnToPreviousPosition {
+                Button { Task { await session.returnToPreviousPosition() } } label: {
+                    Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44)
+                }.accessibilityLabel("返回刚才位置").disabled(session.isNavigating || session.isRestoring)
+            }
             Menu {
                 Text(session.syncMessage ?? sync.status)
                 Button {
@@ -105,38 +112,47 @@ struct ReaderView: View {
                 Toggle("显示细小进度", isOn: $showProgress)
                 if !session.isScrolling { Toggle("显示翻页按钮", isOn: $showPageButtons) }
                 if let warning = session.bridgeWarning { Text(warning) }
+                Button("收起阅读操作栏") { session.toggleControls() }
             } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
                 .accessibilityLabel("更多阅读选项")
         }.padding(.horizontal, 8).background(.regularMaterial)
     }
 
     private var bottomControls: some View {
-        VStack(spacing: 8) {
-            if !didShowControlsHint && session.ready {
-                HStack {
-                    Text("点击正文中央收起或显示操作栏").font(.caption)
-                    Button("知道了") { didShowControlsHint = true }.font(.caption)
-                }
-            }
-            Text(session.progressLabel).font(.caption.monospacedDigit()).foregroundColor(.secondary)
-            HStack {
-                Button { showContents = true } label: { Label("目录", systemImage: "list.bullet").frame(minHeight: 44) }
-                    .disabled(!session.ready)
+        VStack(spacing: 0) {
+            ReaderProgressSlider(session: session)
+            HStack(spacing: 12) {
+                Button { showContents = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
+                    .accessibilityLabel("目录")
+                    .disabled(!session.ready || session.isNavigating)
                 Spacer()
                 if showPageButtons && !session.isScrolling {
                     Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("上一页")
+                }
+                if session.pdfPageCount != nil {
+                    Button { showPageJump = true } label: {
+                        HStack(spacing: 6) {
+                            Text(session.progressLabel).font(.subheadline.monospacedDigit())
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }.frame(minHeight: 44)
+                    }.accessibilityLabel("\(session.progressLabel)，跳转页码")
+                } else {
+                    Text(session.progressLabel).font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
+                }
+                if showPageButtons && !session.isScrolling {
                     Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }.accessibilityLabel("下一页")
-                    Spacer()
                 }
+                Spacer()
                 if store.book(session.bookID)?.format == .epub {
-                    Button { showPreferences = true } label: { Label("设置", systemImage: "textformat.size").frame(minHeight: 44) }
-                        .accessibilityLabel("阅读设置").disabled(!session.ready)
+                    Button { showPreferences = true } label: { Image(systemName: "textformat.size").frame(width: 44, height: 44) }
+                        .accessibilityLabel("阅读设置").disabled(!session.ready || session.isNavigating)
                         .popover(isPresented: $showPreferences) { preferencesPanel }
+                } else {
+                    Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
                 }
-                Button { session.toggleControls() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }
-                    .accessibilityLabel("收起阅读操作栏")
             }
-        }.padding(.horizontal, 16).padding(.top, 10).background(.regularMaterial)
+            .disabled(!session.ready || session.isNavigating || session.isRestoring)
+        }.padding(.horizontal, 16).padding(.top, 8).background(.regularMaterial)
     }
 
     @ViewBuilder private var preferencesPanel: some View {
@@ -149,34 +165,152 @@ struct ReaderView: View {
         }
     }
 }
+private struct ReaderProgressSlider: View {
+    @ObservedObject var session: ReaderSession
+    @State private var draftProgression: Double?
+
+    private var sliderProgression: Double {
+        if let count = session.pdfPageCount, let page = session.currentPDFPage {
+            return count > 1 ? Double(page - 1) / Double(count - 1) : 0
+        }
+        return min(max(session.progression, 0), 1)
+    }
+    private var displayedProgression: Double { draftProgression ?? sliderProgression }
+    private var previewLabel: String {
+        guard draftProgression != nil else { return session.progressLabel }
+        if let count = session.pdfPageCount {
+            let page = Int((displayedProgression * Double(max(0, count - 1))).rounded()) + 1
+            return "第 \(page) / \(count) 页"
+        }
+        return "\(Int((displayedProgression * 100).rounded()))%"
+    }
+
+    var body: some View {
+            Slider(value: Binding(get: { displayedProgression }, set: { draftProgression = $0 }), in: 0...1) { editing in
+                if editing {
+                    draftProgression = sliderProgression
+                } else if let target = draftProgression {
+                    Task {
+                        await session.jump(toProgression: target)
+                        draftProgression = nil
+                    }
+                }
+            }
+            .frame(height: 44)
+            .overlay(alignment: .top) {
+                if draftProgression != nil {
+                    Text(previewLabel).font(.caption.monospacedDigit())
+                        .padding(8).background(.regularMaterial, in: Capsule())
+                        .offset(y: -24).allowsHitTesting(false)
+                }
+            }
+            .accessibilityLabel("阅读进度")
+            .accessibilityValue(previewLabel)
+            .accessibilityHint("调整后跳转到所选位置")
+        .disabled(!session.ready || session.isRestoring || session.isNavigating)
+    }
+}
+
+struct PDFPageJumpView: View {
+    @ObservedObject var session: ReaderSession
+    @Environment(\.dismiss) private var dismiss
+    @State private var pageInput = ""
+    @State private var pageInputError: String?
+    @FocusState private var pageInputFocused: Bool
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    HStack {
+                        Text("页码")
+                        TextField(session.currentPDFPage.map(String.init) ?? "输入页码", text: $pageInput)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .focused($pageInputFocused)
+                            .accessibilityLabel("跳转页码")
+                            .accessibilityIdentifier("pdf.pageInput")
+                            .onSubmit { jump() }
+                            .onChange(of: pageInput) { _ in pageInputError = nil }
+                            .disabled(session.isNavigating)
+                    }
+                } footer: {
+                    if let pageInputError { Text(pageInputError).foregroundColor(.red) }
+                    else { Text("共 \(session.pdfPageCount ?? 0) 页") }
+                }
+            }
+            .navigationTitle("跳转页码").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("跳转") { jump() }
+                        .disabled(pageInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.isNavigating || session.isRestoring)
+                }
+            }
+            .task { pageInputFocused = true }
+        }.navigationViewStyle(.stack)
+    }
+
+    private func jump() {
+        guard let count = session.pdfPageCount,
+              let page = Int(pageInput.trimmingCharacters(in: .whitespacesAndNewlines)), (1...count).contains(page) else {
+            pageInputError = "请输入 1 到 \(session.pdfPageCount ?? 0) 的页码"
+            return
+        }
+        pageInputFocused = false
+        Task {
+            await session.jump(toPage: page)
+            if session.currentPDFPage == page { dismiss() }
+        }
+    }
+}
 private struct ReaderContentsView: View {
     @ObservedObject var session: ReaderSession
     @Environment(\.dismiss) private var dismiss
     @State private var locating = true
+    @State private var searchText = ""
     private let positionID = "current-reading-position"
+
+    private var filteredContents: [ContentsItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return query.isEmpty ? session.contents : session.contents.filter { $0.title.localizedStandardContains(query) }
+    }
 
     var body: some View {
         NavigationView {
             ScrollViewReader { proxy in
                 List {
-                    if !locating && session.currentContentsID == nil { currentPosition }
-                    ForEach(session.contents) { item in
-                        Button {
-                            dismiss()
-                            Task { await session.go(item) }
-                        } label: {
-                            HStack(spacing: 16) {
-                                Text(item.title).foregroundColor(.primary)
-                                Spacer(minLength: 8)
-                                if let page = item.pdfPage {
-                                    Text("\(page + 1)").font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
-                                }
-                            }.padding(.vertical, 8)
+                    if !locating && !filteredContents.contains(where: { $0.id == session.currentContentsID }) { currentPosition }
+                    ForEach(filteredContents) { item in
+                        VStack(alignment: .leading, spacing: 0) {
+                            Button {
+                                dismiss()
+                                Task { await session.go(item) }
+                            } label: {
+                                HStack(spacing: 16) {
+                                    Text(item.title)
+                                        .fontWeight(item.id == session.currentContentsID ? .semibold : .regular)
+                                        .foregroundColor(item.id == session.currentContentsID ? .accentColor : .primary)
+                                    Spacer(minLength: 8)
+                                    if item.id == session.currentContentsID {
+                                        Image(systemName: "checkmark").foregroundColor(.accentColor)
+                                            .accessibilityLabel("当前章节")
+                                    }
+                                    if let page = item.pdfPage {
+                                        Text("\(page + 1)").font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
+                                    }
+                                }.padding(.vertical, 8).frame(minHeight: 44)
+                            }
+                            .disabled(session.isNavigating)
+                            if !locating && item.id == session.currentContentsID { currentPosition }
                         }
-                        if !locating && item.id == session.currentContentsID { currentPosition }
+                    }
+                    if filteredContents.isEmpty && !searchText.isEmpty {
+                        Text("没有匹配的章节").foregroundColor(.secondary)
                     }
                 }
                 .listStyle(.plain)
+                .searchable(text: $searchText, prompt: "搜索章节")
                 .overlay { if locating { ProgressView("正在定位…") } }
                 .task {
                     await session.refreshContentsPosition()

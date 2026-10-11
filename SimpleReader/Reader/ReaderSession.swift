@@ -23,6 +23,8 @@ struct SyncPrompt: Identifiable {
     @Published private(set) var controlsVisible = true
     @Published private(set) var supportsScrolling = false
     @Published private(set) var isRestoring = false
+    @Published private(set) var isNavigating = false
+    @Published private(set) var canReturnToPreviousPosition = false
     @Published private(set) var recoveryError: String?
     @Published var error: String?
     @Published var bridgeWarning: String?
@@ -67,6 +69,8 @@ struct SyncPrompt: Identifiable {
         let destination: PDFDestination?
     }
     private var checkpoint: Checkpoint?
+    private var previousPosition: Checkpoint?
+    private var navigationOrigin: Checkpoint?
     private var restoration: Task<Void, Never>?
     private var restorationRevision = 0
     private var isActive = true
@@ -119,6 +123,11 @@ struct SyncPrompt: Identifiable {
     }
     var title: String { store.book(bookID)?.title ?? "阅读" }
     var isScrolling: Bool { supportsScrolling && store.settings.reader.layout == .scroll }
+    var pdfPageCount: Int? { pdf?.document?.pageCount }
+    var currentPDFPage: Int? {
+        guard let pdf = pdf, let document = pdf.document, let page = pdf.currentPage else { return nil }
+        return document.index(for: page) + 1
+    }
     var progressLabel: String {
         if let document = pdf?.document, let page = pdf?.currentPage {
             return "第 \(document.index(for: page) + 1) / \(document.pageCount) 页"
@@ -226,7 +235,6 @@ struct SyncPrompt: Identifiable {
                     guard let view = view else { return }
                     self?.contentTapped(at: point, in: view.bounds)
                 }
-                if let page = book.position?.pdfPage, let target = document.page(at: min(max(page,0),document.pageCount-1)) { view.go(to: target) }
                 if let outline = document.outlineRoot {
                     func flatten(_ item: PDFOutline, depth: Int = 0) -> [ContentsItem] {
                         (0..<item.numberOfChildren).flatMap { index -> [ContentsItem] in
@@ -273,7 +281,24 @@ struct SyncPrompt: Identifiable {
                 }
                 try await Task.sleep(nanoseconds: 100_000_000)
             }
-        } else if let document = pdf?.document, let page = pdf?.currentPage {
+        } else if let view = pdf, let document = view.document {
+            // PDFKit ignores page navigation before the reader has a viewport.
+            // Keep the saved position intact until layout can restore it.
+            for _ in 0..<50 {
+                try Task.checkCancellation()
+                if view.window != nil && !view.bounds.isEmpty { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard !closed, view.window != nil, !view.bounds.isEmpty else {
+                throw AppFailure("PDF 布局未就绪，请重新打开")
+            }
+            container.view.layoutIfNeeded()
+            view.layoutIfNeeded()
+            if let index = book.position?.pdfPage,
+               let target = document.page(at: min(max(index, 0), document.pageCount - 1)) {
+                view.go(to: target)
+            }
+            guard let page = view.currentPage else { throw AppFailure("无法恢复 PDF 阅读位置") }
             let index = document.index(for: page)
             position = ReadingPosition(progression: Double(index+1)/Double(document.pageCount), pdfPage: index, updatedAt: current?.updatedAt ?? Date())
         }
@@ -364,13 +389,17 @@ struct SyncPrompt: Identifiable {
         navigationRevision += 1
         saving?.cancel(); captureGeneration += 1
         if checkpoint == nil {
-            // Preserve a turn whose debounced text capture has not finished yet.
-            // Never sample the navigator after its viewport has started changing.
-            if let locator = latestLocator, locator.jsonString != capturedLocator?.jsonString {
-                saveChanged(ReadingPosition(progression: locator.locations.totalProgression ?? progression,
-                    locatorJSON: locator.jsonString, updatedAt: Date()))
+            if let origin = navigationOrigin {
+                checkpoint = origin
+            } else {
+                // Preserve a turn whose debounced text capture has not finished yet.
+                // Never sample the navigator after its viewport has started changing.
+                if let locator = latestLocator, locator.jsonString != capturedLocator?.jsonString {
+                    saveChanged(ReadingPosition(progression: locator.locations.totalProgression ?? progression,
+                        locatorJSON: locator.jsonString, updatedAt: Date()))
+                }
+                checkpoint = Checkpoint(position: current, locator: latestLocator, destination: pdfCheckpointDestination())
             }
-            checkpoint = Checkpoint(position: current, locator: latestLocator, destination: pdfCheckpointDestination())
         }
         isRestoring = true
         container.view.isUserInteractionEnabled = false
@@ -380,11 +409,11 @@ struct SyncPrompt: Identifiable {
             return pdf?.currentDestination
         }
         let bounds = page.bounds(for: pdf.displayBox)
-        var point = CGPoint(x: bounds.minX, y: bounds.maxY)
-        if let destination = pdf.currentDestination, destination.page === page {
-            point.x = min(max(destination.point.x, bounds.minX), bounds.maxX)
-            point.y = min(max(destination.point.y, bounds.minY), bounds.maxY)
-        }
+        // PDFView.currentDestination can describe the viewport's lower edge on
+        // iPad. Returning to that point would advance into the following page.
+        var point = pdf.convert(CGPoint(x: pdf.bounds.minX, y: pdf.bounds.minY), to: page)
+        point.x = min(max(point.x, bounds.minX), bounds.maxX)
+        point.y = min(max(point.y, bounds.minY), bounds.maxY)
         return PDFDestination(page: page, at: point)
     }
     private func scheduleRestoration() {
@@ -508,7 +537,7 @@ struct SyncPrompt: Identifiable {
         }
     }
     private func locationChanged(_ locator: Locator) {
-        guard !suppressChanges, !isRestoring, !closed, !container.isPageTurnGestureActive else { return }
+        guard !suppressChanges, !isRestoring, !isNavigating, !closed, !container.isPageTurnGestureActive else { return }
         let locator = adjusted(locator)
         guard locator.jsonString != latestLocator?.jsonString else { return }
         latestLocator = locator
@@ -537,7 +566,7 @@ struct SyncPrompt: Identifiable {
         capturedLocator = locator
     }
     private func pdfChanged() {
-        guard !suppressChanges, !isRestoring, !closed, let view = pdf, let document = view.document, let page = view.currentPage else { return }
+        guard !suppressChanges, !isRestoring, !isNavigating, !closed, let view = pdf, let document = view.document, let page = view.currentPage else { return }
         let index = document.index(for: page)
         if index == current?.pdfPage { return }
         userHasMoved = true
@@ -548,11 +577,15 @@ struct SyncPrompt: Identifiable {
         guard var book = store.book(bookID) else { return }
         // Restoring an existing page should not create a dirty record.
         if book.position?.pdfPage == position.pdfPage && book.position?.locatorJSON == position.locatorJSON && book.position?.xpointer == position.xpointer { return }
-        current = position; progression = position.progression; book.position = position; book.pendingSync = true
-        do { try store.save(book); persistenceError = nil } catch { persistenceError = error; self.error = error.localizedDescription }
+        book.position = position; book.pendingSync = true
+        do {
+            try store.save(book)
+            current = position; progression = position.progression
+            persistenceError = nil
+        } catch { persistenceError = error; self.error = error.localizedDescription }
     }
     func flush() async {
-        guard userHasMoved, !isRestoring, !closed else { return }
+        guard userHasMoved, !isRestoring, !isNavigating, !closed else { return }
         saving?.cancel(); captureGeneration += 1
         if let locator = latestLocator ?? activeEPUB?.currentLocation { await captureEPUB(locator, generation: captureGeneration) }
         else { pdfChanged() }
@@ -589,7 +622,7 @@ struct SyncPrompt: Identifiable {
         await foreground()
     }
     func turn(forward: Bool) async {
-        guard ready, !closed, !suppressChanges, !isRestoring, !turningPage else { return }
+        guard ready, !closed, !suppressChanges, !isRestoring, !isNavigating, !turningPage else { return }
         turningPage = true
         defer { turningPage = false }
         navigationRevision += 1
@@ -624,13 +657,153 @@ struct SyncPrompt: Identifiable {
         }
     }
     func go(_ item: ContentsItem) async {
-        guard ready, !closed, !suppressChanges, !isRestoring else { return }
+        if let link = item.link { await navigate(to: .link(link)) }
+        else if let page = item.pdfPage { await jump(toPage: page + 1) }
+    }
+    func jump(toProgression value: Double) async {
+        guard value.isFinite else { return }
+        let value = min(max(value, 0), 1)
+        if let count = pdfPageCount {
+            await jump(toPage: Int((value * Double(max(count - 1, 0))).rounded()) + 1)
+        } else {
+            await navigate(to: .progression(value))
+        }
+    }
+    func jump(toPage page: Int) async {
+        guard let count = pdfPageCount, (1...count).contains(page) else {
+            error = "页码不在本书范围内"
+            return
+        }
+        guard page != currentPDFPage else { return }
+        await navigate(to: .page(page - 1))
+    }
+    func returnToPreviousPosition() async {
+        guard let previousPosition = previousPosition else { return }
+        await navigate(to: .checkpoint(previousPosition), returning: true)
+    }
+
+    private enum NavigationTarget {
+        case progression(Double), link(ReadiumShared.Link), page(Int), checkpoint(Checkpoint)
+    }
+    private func move(to target: NavigationTarget, revision: Int) async throws {
+        func checkActive() throws {
+            guard revision == restorationRevision, isActive, !isRestoring, !closed, !Task.isCancelled else {
+                throw CancellationError()
+            }
+        }
+        if let navigator = activeEPUB {
+            let locator: Locator?
+            switch target {
+            case .progression(let value): locator = await navigator.publication.locate(progression: value)
+            case .link(let link):
+                guard await navigator.go(to: link) else { throw AppFailure("无法打开章节") }
+                return
+            case .checkpoint(let saved):
+                // Open its resource first so resolving a text anchor also works across chapters.
+                if let location = saved.locator {
+                    guard await navigator.go(to: location) else { throw AppFailure("无法返回原位置") }
+                    try checkActive()
+                }
+                if let pointer = saved.position?.xpointer {
+                    locator = try await EPUBPositionBridge.locator(pointer: pointer, navigator: navigator, spine: originalSpine)
+                } else { locator = saved.locator }
+            case .page: locator = nil
+            }
+            try checkActive()
+            guard let locator = locator, await navigator.go(to: locator) else { throw AppFailure("无法跳转到指定位置") }
+        } else if let pdf = pdf {
+            switch target {
+            case .page(let index):
+                guard let page = pdf.document?.page(at: index) else { throw AppFailure("页码不在本书范围内") }
+                pdf.go(to: page)
+            case .checkpoint(let saved):
+                guard let destination = saved.destination else { throw AppFailure("无法返回原位置") }
+                pdf.go(to: destination)
+            default: throw AppFailure("无法跳转到指定位置")
+            }
+        }
+    }
+    private func navigate(to target: NavigationTarget, returning: Bool = false) async {
+        guard ready, isActive, !closed, !suppressChanges, !isRestoring, !isNavigating,
+              !turningPage, !container.isPageTurnGestureActive else { return }
+        isNavigating = true
         navigationRevision += 1
-        if let link = item.link { _ = await activeEPUB?.go(to: link) }
-        if let page = item.pdfPage, let target = pdf?.document?.page(at: page) { pdf?.go(to: target) }
+        saving?.cancel(); captureGeneration += 1
+        let revision = restorationRevision
+        let navigator = activeEPUB
+        var origin = Checkpoint(position: current, locator: navigator?.currentLocation.map(adjusted) ?? latestLocator,
+                                destination: pdfCheckpointDestination())
+        navigationOrigin = origin
+        container.view.isUserInteractionEnabled = false
+        defer {
+            navigationOrigin = nil
+            isNavigating = false
+            if !isRestoring && !closed { container.view.isUserInteractionEnabled = true }
+        }
+        func checkActive() throws {
+            guard revision == restorationRevision, isActive, !isRestoring, !closed, !Task.isCancelled else {
+                throw CancellationError()
+            }
+        }
+        do {
+            if let navigator = navigator, let locator = origin.locator {
+                let pointer = try? await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine)
+                try checkActive()
+                origin = Checkpoint(position: ReadingPosition(progression: locator.locations.totalProgression ?? progression,
+                    locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: current?.updatedAt ?? Date()),
+                    locator: locator, destination: nil)
+                navigationOrigin = origin
+            }
+            try await move(to: target, revision: revision)
+            try checkActive()
+            // Let Readium's delayed location notification settle before capturing the target.
+            try await Task.sleep(nanoseconds: 500_000_000)
+            try checkActive()
+            if let navigator = navigator, let locator = navigator.currentLocation.map(adjusted) {
+                let pointer = try? await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine)
+                try checkActive()
+                saveChanged(ReadingPosition(progression: locator.locations.totalProgression ?? progression,
+                    locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: Date()))
+                if let error = persistenceError { throw error }
+                latestLocator = locator; capturedLocator = locator
+                bridgeWarning = pointer == nil ? "无法转换当前位置，已保留本地进度；同步上传暂停。" : nil
+            } else if let page = currentPDFPage, let count = pdfPageCount {
+                saveChanged(ReadingPosition(progression: Double(page) / Double(count), pdfPage: page - 1, updatedAt: Date()))
+                if let error = persistenceError { throw error }
+            }
+            userHasMoved = true
+            previousPosition = returning ? nil : origin
+            canReturnToPreviousPosition = previousPosition != nil
+            navigationOrigin = nil
+            await refreshContentsPosition()
+        } catch is CancellationError {
+            if revision == restorationRevision, isActive, !isRestoring, !closed {
+                checkpoint = origin
+                isRestoring = true
+                scheduleRestoration()
+            }
+        } catch {
+            if revision == restorationRevision, isActive, !closed, !isRestoring {
+                do {
+                    try await move(to: .checkpoint(origin), revision: revision)
+                    try checkActive()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    checkpoint = origin
+                    isRestoring = true
+                    recoveryError = "无法恢复跳转前的位置，请重试"
+                    scheduleRestoration()
+                    return
+                }
+                latestLocator = origin.locator
+                progression = origin.position?.progression ?? progression
+                self.error = error.localizedDescription
+            }
+        }
     }
     func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false, applyRemote: Bool = true) async {
-        guard ready, !busySync, !suppressChanges, (!isRestoring || !applyRemote), !turningPage, !container.isPageTurnGestureActive, prompt == nil else { return }
+        guard ready, !busySync, !suppressChanges, !isNavigating, (!isRestoring || !applyRemote), !turningPage, !container.isPageTurnGestureActive, prompt == nil else { return }
         busySync = true; defer { busySync = false }
         let revision = navigationRevision
         syncMessage = nil
@@ -659,7 +832,7 @@ struct SyncPrompt: Identifiable {
         } catch { syncMessage = "同步失败：\(error.localizedDescription)" }
     }
     func receive(_ remote: RemoteProgress, approximate: Bool = false) async {
-        guard ready, !closed, !suppressChanges, !isRestoring else { return }
+        guard ready, !closed, !suppressChanges, !isRestoring, !isNavigating else { return }
         let revision = restorationRevision
         syncMessage = nil
         suppressChanges = true; saving?.cancel(); captureGeneration += 1
