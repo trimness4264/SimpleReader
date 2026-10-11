@@ -36,6 +36,11 @@ struct SyncPrompt: Identifiable {
     private var originalSpine: [String] = []
     private var progressionRanges: [String: ClosedRange<Double>] = [:]
     private var epub: EPUBNavigatorViewController?
+    private var continuous: ContinuousEPUBController?
+    private var activeEPUB: EPUBReadingNavigator? {
+        if let continuous = continuous { return continuous }
+        return epub
+    }
     private var pdf: PDFView?
     private var pageObserver: NSObjectProtocol?
     private var saving: Task<Void, Never>?
@@ -106,7 +111,7 @@ struct SyncPrompt: Identifiable {
             currentContentsID = contents.last(where: { ($0.pdfPage ?? Int.max) <= index })?.id
             return
         }
-        guard let navigator = epub, let locator = navigator.currentLocation else { return }
+        guard let navigator = activeEPUB, let locator = navigator.currentLocation else { return }
         let href = EPUBPositionBridge.normalize(locator.href.string)
         let candidates = contents.filter { item in
             item.link.map { EPUBPositionBridge.normalize($0.href) == href } ?? false
@@ -221,7 +226,7 @@ struct SyncPrompt: Identifiable {
     private func initialCheckpoint() async throws {
         guard var book = store.book(bookID) else { return }
         var position: ReadingPosition?
-        if let navigator = epub {
+        if let navigator = activeEPUB {
             // WebKit cold starts can outlast the usual two-second chapter load.
             // Keep restoration events suppressed until the initial checkpoint is saved.
             for _ in 0..<100 {
@@ -247,7 +252,7 @@ struct SyncPrompt: Identifiable {
         }
         if let position = position {
             current = position; progression = position.progression; book.position = position
-            latestLocator = epub?.currentLocation.map(adjusted)
+            latestLocator = activeEPUB?.currentLocation.map(adjusted)
             capturedLocator = latestLocator
             // Opening/restoring a file is a checkpoint, never a new user edit.
             try store.save(book)
@@ -262,7 +267,7 @@ struct SyncPrompt: Identifiable {
         default: theme = container.traitCollection.userInterfaceStyle == .dark ? .dark : .light
         }
         let twoPages = displaysTwoPages && !isScrolling
-        return EPUBPreferences(columnCount: twoPages ? .two : .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, scroll: isScrolling, spread: twoPages ? .always : .never, theme: theme)
+        return EPUBPreferences(columnCount: twoPages ? .two : .one, fontFamily: ReaderFonts.latin, fontSize: settings.fontSize / 100, publisherStyles: false, scroll: false, spread: twoPages ? .always : .never, theme: theme)
     }
     private func updatePageLayout(size: CGSize, idiom: UIUserInterfaceIdiom) {
         let twoPages = ReaderPageLayout.displaysTwoPages(size: size, idiom: idiom)
@@ -284,14 +289,33 @@ struct SyncPrompt: Identifiable {
     }
     func updatePreferences() {
         protectPosition()
-        epub?.submitPreferences(preferences())
+        if let navigator = activeEPUB, isScrolling != (continuous != nil) {
+            do { try installNavigator(publication: navigator.publication, locator: checkpoint?.locator ?? latestLocator) }
+            catch { recoveryError = error.localizedDescription }
+        } else {
+            continuous?.updateSettings(store.settings.reader)
+            epub?.submitPreferences(preferences())
+        }
         scheduleRestoration()
     }
     private func installNavigator(publication: Publication, locator: Locator?) throws {
         supportsScrolling = publication.metadata.layout != .fixed
+        epub?.delegate = nil
+        continuous?.close()
+        continuous = nil
+        epub = nil
+        if isScrolling {
+            let navigator = ContinuousEPUBController(publication: publication, initialLocation: locator,
+                settings: store.settings.reader)
+            navigator.onLocationChanged = { [weak self] location in self?.locationChanged(location) }
+            navigator.onError = { [weak self] error in self?.error = error.localizedDescription }
+            continuous = navigator
+            container.canTurnPage = { false }
+            container.replaceChild(with: navigator)
+            return
+        }
         let navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: locator,
             config: .init(preferences: preferences(), fontFamilyDeclarations: try ReaderFonts.declarations()))
-        epub?.delegate = nil
         navigator.delegate = self
         epub = navigator
         container.replaceChild(with: navigator)
@@ -352,11 +376,11 @@ struct SyncPrompt: Identifiable {
     private func restorePosition(revision: Int) async throws {
         guard let checkpoint = checkpoint else { return }
         recoveryError = nil
-        if let navigator = epub {
+        if let navigator = activeEPUB {
             if wasBackgrounded {
                 try installNavigator(publication: navigator.publication, locator: checkpoint.locator)
             }
-            guard let navigator = epub, let location = checkpoint.locator else {
+            guard let navigator = activeEPUB, let location = checkpoint.locator else {
                 throw AppFailure("无法读取上次阅读位置")
             }
             var loaded = false
@@ -385,7 +409,7 @@ struct SyncPrompt: Identifiable {
         // every 100 ms. Keep those final reflow callbacks out of persistence.
         try await Task.sleep(nanoseconds: 500_000_000)
         guard revision == restorationRevision, isActive, !closed else { throw CancellationError() }
-        if let navigator = epub, let locator = navigator.currentLocation,
+        if let navigator = activeEPUB, let locator = navigator.currentLocation,
            var position = checkpoint.position, position.xpointer == nil {
             do {
                 position.xpointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: locator,
@@ -402,7 +426,7 @@ struct SyncPrompt: Identifiable {
                 current = position
             }
         }
-        latestLocator = epub?.currentLocation.map(adjusted)
+        latestLocator = activeEPUB?.currentLocation.map(adjusted)
         capturedLocator = latestLocator
         userHasMoved = false
         progression = checkpoint.position?.progression ?? progression
@@ -413,6 +437,9 @@ struct SyncPrompt: Identifiable {
     }
     func navigator(_ navigator: Navigator, presentError error: NavigatorError) { self.error = error.localizedDescription }
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
+        locationChanged(locator)
+    }
+    private func locationChanged(_ locator: Locator) {
         guard !suppressChanges, !isRestoring, !closed else { return }
         let locator = adjusted(locator)
         guard locator.jsonString != latestLocator?.jsonString else { return }
@@ -432,7 +459,7 @@ struct SyncPrompt: Identifiable {
     }
     private func captureEPUB(_ locator: Locator, generation: Int) async {
         let locator = adjusted(locator)
-        guard let navigator = epub else { return }
+        guard let navigator = activeEPUB else { return }
         let pointer: String?
         do { pointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: originalSpine); bridgeWarning = nil }
         catch { pointer = nil; bridgeWarning = "无法转换当前位置，已保留本地进度；同步上传暂停。" }
@@ -459,13 +486,14 @@ struct SyncPrompt: Identifiable {
     func flush() async {
         guard userHasMoved, !isRestoring, !closed else { return }
         saving?.cancel(); captureGeneration += 1
-        if let locator = epub?.currentLocation { await captureEPUB(locator, generation: captureGeneration) }
+        if let locator = activeEPUB?.currentLocation { await captureEPUB(locator, generation: captureGeneration) }
         else { pdfChanged() }
     }
     func close() async {
         container.cancelPageTransition()
         await flush()
         closed = true
+        continuous?.close()
         restorationRevision += 1; restoration?.cancel()
         await synchronize(flushFirst: false, applyRemote: false)
     }
@@ -497,18 +525,25 @@ struct SyncPrompt: Identifiable {
         turningPage = true
         defer { turningPage = false }
         navigationRevision += 1
+        let revision = restorationRevision
         if let epub = epub {
-            if epub.settings.scroll {
-                let options = NavigatorGoOptions(animated: !UIAccessibility.isReduceMotionEnabled)
-                if forward { _ = await epub.goForward(options: options) }
-                else { _ = await epub.goBackward(options: options) }
-                return
-            }
             let direction: CGFloat = forward == (epub.presentation.readingProgression == .ltr) ? 1 : -1
             await container.animatePageTurn(direction: direction) {
                 let options = NavigatorGoOptions(animated: false)
-                if forward { return await epub.goForward(options: options) }
-                return await epub.goBackward(options: options)
+                let moved = forward ? await epub.goForward(options: options) : await epub.goBackward(options: options)
+                guard moved, self.restorationRevision == revision, self.epub === epub,
+                      self.isActive, !self.closed, !self.isRestoring else { return false }
+                do {
+                    _ = try await epub.evaluateJavaScript("document.readyState").get()
+                    guard self.restorationRevision == revision, self.isActive, !self.closed, !self.isRestoring else { return false }
+                    try await self.container.waitForEPUBContent()
+                    return true
+                } catch is CancellationError {
+                    return false
+                } catch {
+                    self.error = error.localizedDescription
+                    return false
+                }
             }
         }
         else if let pdf = pdf, let doc = pdf.document, let page = pdf.currentPage {
@@ -523,7 +558,7 @@ struct SyncPrompt: Identifiable {
     func go(_ item: ContentsItem) async {
         guard ready, !closed, !suppressChanges, !isRestoring else { return }
         navigationRevision += 1
-        if let link = item.link { await epub?.go(to: link) }
+        if let link = item.link { _ = await activeEPUB?.go(to: link) }
         if let page = item.pdfPage, let target = pdf?.document?.page(at: page) { pdf?.go(to: target) }
     }
     func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false, applyRemote: Bool = true) async {
@@ -562,12 +597,12 @@ struct SyncPrompt: Identifiable {
         suppressChanges = true; saving?.cancel(); captureGeneration += 1
         defer { suppressChanges = false }
         let previous = current
-        epub?.view.isUserInteractionEnabled = false
+        container.view.isUserInteractionEnabled = false
         pdf?.isUserInteractionEnabled = false
-        defer { epub?.view.isUserInteractionEnabled = true; pdf?.isUserInteractionEnabled = true }
+        defer { container.view.isUserInteractionEnabled = true; pdf?.isUserInteractionEnabled = true }
         do {
             var position: ReadingPosition
-            if let navigator = epub {
+            if let navigator = activeEPUB {
                 let locator: Locator
                 if approximate {
                     guard let percentage = remote.percentage, let target = await navigator.publication.locate(progression: percentage) else { throw AppFailure("无法按百分比定位") }
@@ -587,16 +622,16 @@ struct SyncPrompt: Identifiable {
             }
             try sync.acceptRemote(remote, id: bookID, position: position)
             current = position; progression = position.progression; bridgeWarning = nil
-            latestLocator = epub?.currentLocation.map(adjusted)
+            latestLocator = activeEPUB?.currentLocation.map(adjusted)
             capturedLocator = latestLocator
             userHasMoved = false
             try await Task.sleep(nanoseconds: 200_000_000)
         } catch {
             guard revision == restorationRevision, !closed, !isRestoring else { return }
             // A failed conversion may have opened a different chapter. Restore before offering fallback.
-            if let json = previous?.locatorJSON, let locator = try? Locator(jsonString: json) { await epub?.go(to: locator) }
+            if let json = previous?.locatorJSON, let locator = try? Locator(jsonString: json) { _ = await activeEPUB?.go(to: locator) }
             syncMessage = "同步失败：\(error.localizedDescription)"
-            if epub != nil && !approximate {
+            if activeEPUB != nil && !approximate {
                 offeredApproximateFingerprint = remote.fingerprint
                 prompt = SyncPrompt(kind: .approximate, remote: remote)
             }
@@ -771,6 +806,28 @@ private final class ReaderContainerView: UIView {
         pageContent = nil
     }
 
+    func waitForEPUBContent() async throws {
+        let revision = pageTransitionRevision
+        // Readium resumes navigation before unhiding a cold chapter's scroll view.
+        // Observe UIKit visibility instead of guessing a rendering delay.
+        for _ in 0..<120 {
+            guard revision == pageTransitionRevision, view.window != nil else { throw CancellationError() }
+            if children.first.map({ hasVisibleEPUBContent(in: $0.view) }) == true { return }
+            try await Task.sleep(nanoseconds: 16_000_000)
+        }
+        throw NSError(domain: "Reader", code: 1, userInfo: [NSLocalizedDescriptionKey: "章节内容尚未显示，请重试。"])
+    }
+
+    private func hasVisibleEPUBContent(in content: UIView) -> Bool {
+        guard !content.isHidden, content.alpha > 0.99 else { return false }
+        if let webView = content as? WKWebView {
+            let visible = webView.convert(webView.bounds, to: view).intersection(view.bounds)
+            return visible.width > view.bounds.width / 2 && visible.height > view.bounds.height / 2
+                && webView.scrollView.alpha > 0.99
+        }
+        return content.subviews.contains { hasVisibleEPUBContent(in: $0) }
+    }
+
     func animatePageTurn(direction: CGFloat, navigate: () async -> Bool) async {
         guard !UIAccessibility.isReduceMotionEnabled,
               let content = children.first?.view ?? view.subviews.first(where: { $0 is PDFView }),
@@ -799,13 +856,14 @@ private final class ReaderContainerView: UIView {
               view.window != nil, view.bounds.size == size else { return }
         view.layoutIfNeeded()
         guard revision == pageTransitionRevision else { return }
-        content.transform = CGAffineTransform(translationX: direction * size.width, y: 0)
+        let offset = CGAffineTransform(translationX: direction * size.width, y: 0)
+        content.transform = offset
         let timing = UICubicTimingParameters(controlPoint1: CGPoint(x: 0.22, y: 1), controlPoint2: CGPoint(x: 0.36, y: 1))
         let animator = UIViewPropertyAnimator(duration: 0.28, timingParameters: timing)
         pageAnimator = animator
         animator.addAnimations {
             content.transform = .identity
-            snapshot.transform = CGAffineTransform(translationX: -direction * size.width, y: 0)
+            snapshot.transform = offset.inverted()
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             animator.addCompletion { _ in continuation.resume() }

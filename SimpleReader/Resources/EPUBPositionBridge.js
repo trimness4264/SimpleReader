@@ -94,7 +94,8 @@
   }
   function capture(spine, single) {
     if (!document.body || document.readyState === 'loading') throw Error('Chapter is still loading');
-    const visible = v => v.width > 0 && v.height > 0 && v.right > 0 && v.left < innerWidth && v.bottom > 0 && v.top < innerHeight;
+    const viewport = window.SimpleReaderViewport || {top: 0, bottom: innerHeight};
+    const visible = v => v.width > 0 && v.height > 0 && v.right > 0 && v.left < innerWidth && v.bottom > viewport.top && v.top < viewport.bottom;
     // Keep text and media in document order, so a picture before a caption
     // anchors to the picture. Ignore layout containers and injected content.
     const walker = document.createTreeWalker(document.body,NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,{

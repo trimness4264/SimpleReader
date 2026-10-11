@@ -721,7 +721,7 @@ private final class ReaderSyncStub: ProgressSyncClient {
         }
     }
 
-    private func readingAnchorIsVisible(_ pointer: String, in navigator: EPUBNavigatorViewController) async throws -> Bool {
+    private func readingAnchorIsVisible(_ pointer: String, in navigator: EPUBReadingNavigator) async throws -> Bool {
         let result = try await navigator.evaluateJavaScript("""
             \(try EPUBPositionBridge.source)
             (() => {
@@ -733,8 +733,9 @@ private final class ReaderSyncStub: ProgressSyncClient {
                     range.setStart(node, target.textOffset);
                     range.setEnd(node, Math.min(node.length, target.textOffset + 1));
                 } else { range.selectNode(element); }
+                const viewport = window.SimpleReaderViewport || {top: 0, bottom: innerHeight};
                 return Array.from(range.getClientRects()).some(rect =>
-                    rect.right > 0 && rect.left < innerWidth && rect.bottom > 0 && rect.top < innerHeight);
+                    rect.right > 0 && rect.left < innerWidth && rect.bottom > viewport.top && rect.top < viewport.bottom);
             })()
             """).get()
         return result as? Bool == true
@@ -968,6 +969,131 @@ private final class ReaderSyncStub: ProgressSyncClient {
         XCTAssertEqual(restored.theme, "dark")
     }
 
+    func testContinuousScrollingCrossesChaptersWithoutPageTurns() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        var settings = store.settings; settings.reader.layout = .scroll; try store.saveSettings(settings)
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+                                    sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene), host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(session.container); host.view.addSubview(session.container.view)
+        session.container.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        session.container.didMove(toParent: host)
+        defer { window.isHidden = true }
+        await session.load()
+        let navigator = try XCTUnwrap(session.container.children.first as? ContinuousEPUBController)
+        let scroll = navigator.scrollView
+        for _ in 0..<100 {
+            let views = scroll.subviews.compactMap { $0 as? WKWebView }
+            if views.count == 2 && views.allSatisfy({ !$0.isLoading && $0.frame.height > 1000 }) { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let chapters = scroll.subviews.compactMap { $0 as? WKWebView }.sorted { $0.frame.minY < $1.frame.minY }
+        XCTAssertEqual(chapters.count, 2)
+        let first = try XCTUnwrap(chapters.first), second = try XCTUnwrap(chapters.last)
+        XCTAssertEqual(first.frame.maxY, second.frame.minY, accuracy: 1, "Chapters must meet in one vertical content flow")
+        XCTAssertFalse(first.scrollView.isScrollEnabled)
+        XCTAssertFalse(second.scrollView.isScrollEnabled)
+        XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width)
+        scroll.setContentOffset(CGPoint(x: 0, y: second.frame.minY - 200), animated: false)
+        XCTAssertTrue(first.frame.intersects(scroll.bounds))
+        XCTAssertTrue(second.frame.intersects(scroll.bounds), "Both chapters must be visible together at the boundary")
+        let firstHref = try XCTUnwrap(navigator.currentLocation?.href)
+        scroll.setContentOffset(CGPoint(x: 0, y: second.frame.minY + 250), animated: false)
+        XCTAssertNotEqual(navigator.currentLocation?.href, firstHref, "One uninterrupted scroll crosses the chapter boundary")
+        await session.flush()
+        let saved = try XCTUnwrap(store.book(book.id)?.position)
+        XCTAssertEqual(try EPUBPositionBridge.spineIndex(XCTUnwrap(saved.xpointer)), 1)
+        let visible = try await readingAnchorIsVisible(XCTUnwrap(saved.xpointer), in: navigator)
+        XCTAssertTrue(visible, "Progress must capture the visible text rather than the chapter's first paragraph")
+        scroll.setContentOffset(CGPoint(x: 0, y: second.frame.minY - 1000), animated: false)
+        XCTAssertEqual(navigator.currentLocation?.href, firstHref, "Reverse scrolling also crosses without a separate navigation action")
+        XCTAssertNil(session.error)
+        await session.close()
+    }
+
+    func testContinuousReflowAndForegroundPreserveTextAnchor() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        var settings = store.settings; settings.reader.layout = .scroll; try store.saveSettings(settings)
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene), host = UIViewController()
+        window.rootViewController = host; window.makeKeyAndVisible()
+        host.addChild(session.container); host.view.addSubview(session.container.view)
+        session.container.view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        session.container.didMove(toParent: host)
+        defer { window.isHidden = true }
+        await session.load()
+        await session.go(try XCTUnwrap(session.contents.last))
+        let initial = try XCTUnwrap(session.container.children.first as? ContinuousEPUBController)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        initial.scrollView.setContentOffset(CGPoint(x: 0, y: initial.scrollView.contentOffset.y + 800), animated: false)
+        await session.flush()
+        var checkpoint = try XCTUnwrap(store.book(book.id))
+        let saved = try XCTUnwrap(checkpoint.position)
+        XCTAssertEqual(try EPUBPositionBridge.spineIndex(XCTUnwrap(saved.xpointer)), 1)
+        checkpoint.pendingSync = false; try store.save(checkpoint)
+        for change in 0..<3 {
+            if change == 0 {
+                settings.reader.fontSize = 150; try store.saveSettings(settings); session.updatePreferences()
+            } else if change == 1 {
+                session.container.view.frame.size = CGSize(width: 700, height: 500)
+                session.container.view.setNeedsLayout(); session.container.view.layoutIfNeeded()
+            } else {
+                await session.background(); await session.foreground()
+            }
+            for _ in 0..<100 {
+                if !session.isRestoring { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertFalse(session.isRestoring)
+            XCTAssertNil(session.recoveryError)
+            let navigator = try XCTUnwrap(session.container.children.first as? ContinuousEPUBController)
+            let visible = try await readingAnchorIsVisible(XCTUnwrap(saved.xpointer), in: navigator)
+            XCTAssertTrue(visible, "Change \(change) must preserve the same visible character")
+            await session.flush()
+            XCTAssertEqual(store.book(book.id)?.position, saved)
+            XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
+        }
+        await session.close()
+    }
+
+    func testContinuousImagesAndShortFinalChapterKeepOriginalPointers() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+        var settings = store.settings; settings.reader.layout = .scroll; try store.saveSettings(settings)
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("image-only.epub"))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = session.container; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await session.load()
+        let navigator = try XCTUnwrap(session.container.children.first as? ContinuousEPUBController)
+        XCTAssertNil(session.error)
+        XCTAssertEqual(store.book(book.id)?.position?.xpointer, "/body/DocFragment[1]/body/img")
+        let loaded = try await navigator.evaluateJavaScript("Array.from(document.images).every(image => image.complete && image.naturalWidth > 0)").get() as! Bool
+        XCTAssertTrue(loaded, "Chapter-relative image resources must remain available")
+        let pointer = "/body/DocFragment[2]/body"
+        let target = try await EPUBPositionBridge.locator(pointer: pointer, navigator: navigator)
+        let moved = await navigator.go(to: target)
+        XCTAssertTrue(moved, "The final short chapter must resolve in its own document even when the viewport also shows the previous one")
+        let captured = try await EPUBPositionBridge.capture(navigator: navigator, locator: target)
+        XCTAssertEqual(captured, pointer)
+        XCTAssertNil(session.error)
+        await session.close()
+    }
+
     func testReadingLayoutSwitchPreservesAnchorWithoutCreatingUpload() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -993,7 +1119,6 @@ private final class ReaderSyncStub: ProgressSyncClient {
         let saved = try XCTUnwrap(checkpoint.position)
         XCTAssertGreaterThan(saved.progression, 0)
         checkpoint.pendingSync = false; try store.save(checkpoint)
-        let navigator = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
         XCTAssertTrue(session.supportsScrolling)
         for layout in [ReadingLayout.scroll, .paginated, .scroll] {
             var settings = store.settings; settings.reader.layout = layout; try store.saveSettings(settings)
@@ -1005,10 +1130,12 @@ private final class ReaderSyncStub: ProgressSyncClient {
             }
             XCTAssertFalse(session.isRestoring)
             XCTAssertNil(session.recoveryError)
-            XCTAssertEqual(navigator.settings.scroll, layout == .scroll)
+            let navigator = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
+            XCTAssertEqual(navigator is ContinuousEPUBController, layout == .scroll)
             if layout == .scroll {
-                XCTAssertEqual(navigator.settings.columnCount, .one)
                 XCTAssertFalse(session.container.canTurnPage?() ?? true)
+            } else {
+                XCTAssertFalse(try XCTUnwrap(navigator as? EPUBNavigatorViewController).settings.scroll)
             }
             let visible = try await readingAnchorIsVisible(XCTUnwrap(saved.xpointer), in: navigator)
             XCTAssertTrue(visible, "Switching layouts must keep the original text in view")

@@ -91,7 +91,7 @@ import WebKit
         if match.range(at: 1).location == NSNotFound { return 0 }
         throw AppFailure("无效的章节编号")
     }
-    static func capture(navigator: EPUBNavigatorViewController, locator: Locator, spine: [String]? = nil) async throws -> String {
+    static func capture(navigator: EPUBReadingNavigator, locator: Locator, spine: [String]? = nil) async throws -> String {
         let href = normalize(locator.href.string)
         let hrefs = spine ?? navigator.publication.readingOrder.map(\.href)
         guard let index = hrefs.firstIndex(where: { normalize($0) == href }) else { throw AppFailure("当前章节不在 EPUB 阅读顺序中") }
@@ -99,7 +99,7 @@ import WebKit
         guard let pointer = value as? String else { throw AppFailure("无法获取 EPUB 阅读位置") }
         return pointer
     }
-    static func locator(pointer: String, navigator: EPUBNavigatorViewController, spine: [String]? = nil) async throws -> Locator {
+    static func locator(pointer: String, navigator: EPUBReadingNavigator, spine: [String]? = nil) async throws -> Locator {
         let index = try spineIndex(pointer)
         let hrefs = spine ?? navigator.publication.readingOrder.map(\.href)
         guard hrefs.indices.contains(index) else { throw AppFailure("远端章节不在本书中，请检查两端图书版本") }
@@ -112,7 +112,12 @@ import WebKit
                 guard navigator.currentLocation?.href.string.components(separatedBy: "#")[0] == link.href.components(separatedBy: "#")[0] else { throw AppFailure("正在切换章节") }
                 let value = try await navigator.evaluateJavaScript("\(try source)\nwindow.SimpleReaderBridge.resolve(\(try quoted(pointer)));").get()
                 guard let result = value as? [String: Any], let selector = result["cssSelector"] as? String else { throw AppFailure("无法解析远端正文位置") }
-                var json: [String: Any] = ["href": link.href, "type": link.mediaType?.string ?? "application/xhtml+xml", "locations": ["cssSelector": selector]]
+                var locations: [String: Any] = ["cssSelector": selector]
+                if navigator is ContinuousEPUBController {
+                    locations["continuousTextNodeIndex"] = result["textNodeIndex"]
+                    locations["continuousTextOffset"] = result["textOffset"]
+                }
+                var json: [String: Any] = ["href": link.href, "type": link.mediaType?.string ?? "application/xhtml+xml", "locations": locations]
                 if let highlight = result["highlight"] as? String, !highlight.isEmpty {
                     json["text"] = ["highlight": highlight, "before": result["before"] as? String ?? "", "after": result["after"] as? String ?? ""]
                 } else {
