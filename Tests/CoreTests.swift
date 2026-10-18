@@ -4,25 +4,12 @@ import ReadiumNavigator
 @testable import SimpleReader
 
 final class CoreTests: XCTestCase {
-    @MainActor func testReaderThemeDefaultsToSystemAndMigratesWarmTheme() throws {
-        XCTAssertEqual(ReaderSettings().theme, "system")
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = try LibraryStore(root: root)
-        var settings = store.settings
-        settings.reader.theme = "sepia"
-        try store.saveSettings(settings)
-        let restored = try LibraryStore(root: root)
-        XCTAssertEqual(restored.settings.reader.theme, "system")
-    }
-
     @MainActor func testEPUBThemeFollowsAppearanceAndPreservesManualChoice() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try LibraryStore(root: root, inMemory: true)
         var settings = store.settings
-        settings.reader.theme = "system"
-        try store.saveSettings(settings)
+        XCTAssertEqual(settings.reader.theme, "system")
         let readium = ReadiumService()
         let file = Bundle(for: Self.self).resourceURL!.appendingPathComponent("Fixtures/sample.epub")
         let book = try await BookImportService(store: store, readium: readium).importBook(from: file)

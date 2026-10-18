@@ -164,23 +164,87 @@ private struct CatalogRow: View {
         }
     }
 }
-private struct EntryView: View {
+struct EntryView: View {
     let entry: OPDSEntry
     let model: CatalogModel
     let environment: AppEnvironment
-    @State private var error: String?
-    @State private var queued = false
+    private var downloadLinks: [OPDSLink] {
+        var seen = Set<OPDSLink>()
+        return entry.downloads.filter { seen.insert($0).inserted }
+    }
     var body: some View {
         List {
             Section { Text(entry.title).font(.title2); if !entry.author.isEmpty { Text(entry.author).foregroundColor(.secondary) }; if !entry.summary.isEmpty { Text(entry.summary) } }
             Section(header: Text("下载到本机")) {
-                ForEach(Array(entry.downloads.enumerated()), id: \.offset) { _, link in
-                    Button { do { environment.downloads.enqueue(title: entry.title, link: link, credentials: try model.credentials()); queued = true } catch { self.error = error.localizedDescription } } label: { Label(link.type == "application/pdf" ? "下载 PDF" : "下载 EPUB", systemImage: "arrow.down.circle") }
+                ForEach(downloadLinks, id: \.self) { link in
+                    EntryDownloadView(title: entry.title, link: link, model: model, environment: environment)
                 }
                 if entry.downloads.isEmpty { Text("没有可下载的 EPUB/PDF；DRM 图书暂不支持。").foregroundColor(.secondary) }
-                if queued { Text("已加入下载队列，点右上角下载按钮查看进度。完成后会自动加入书库。").foregroundColor(.secondary) }
             }
-        }.navigationTitle("图书详情").navigationBarTitleDisplayMode(.inline).errorAlert($error)
+        }.navigationTitle("图书详情").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true) } }
+    }
+}
+
+private struct EntryDownloadView: View {
+    let title: String
+    let link: OPDSLink
+    let model: CatalogModel
+    let environment: AppEnvironment
+    @ObservedObject private var manager: DownloadManager
+    @ObservedObject private var store: LibraryStore
+    @State private var reading: Book?
+    @State private var error: String?
+
+    init(title: String, link: OPDSLink, model: CatalogModel, environment: AppEnvironment) {
+        self.title = title; self.link = link; self.model = model; self.environment = environment
+        manager = environment.downloads; store = environment.store
+    }
+
+    private var job: DownloadJob? { manager.job(for: link) }
+    private var format: String { link.type == "application/pdf" ? "PDF" : "EPUB" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let job = job {
+                switch job.state {
+                case .queued, .downloading:
+                    HStack {
+                        Text(job.state == .queued ? "\(format) 等待下载" : "\(format) 正在下载")
+                        Spacer()
+                        if job.state == .downloading {
+                            Text("\(Int(job.progress * 100))%").monospacedDigit().foregroundColor(.secondary)
+                        }
+                    }
+                    if job.state == .downloading { ProgressView(value: job.progress).accessibilityLabel("\(format) 下载进度") }
+                    Button("取消下载", role: .destructive) { manager.cancel(job.id) }
+                case .importing:
+                    ProgressView("\(format) 正在加入书库…")
+                case .finished:
+                    if let id = job.bookID, let book = store.book(id) {
+                        Label("\(format) 已加入书库", systemImage: "checkmark.circle").foregroundColor(.secondary)
+                        Button { reading = book } label: { Label("打开 \(format) 阅读", systemImage: "book") }
+                    } else {
+                        Text("\(format) 已从书库移除").foregroundColor(.secondary)
+                        downloadButton
+                    }
+                case .failed, .cancelled:
+                    Text(job.state == .failed ? "\(format) 下载失败" : "\(format) 已取消").foregroundColor(.secondary)
+                    if let message = job.error { Text(message).font(.caption).foregroundColor(.red) }
+                    Button { manager.retry(job.id) } label: { Label("重新下载 \(format)", systemImage: "arrow.clockwise") }
+                }
+            } else { downloadButton }
+        }
+        .padding(.vertical, 6)
+        .buttonStyle(.borderless)
+        .errorAlert($error)
+        .fullScreenCover(item: $reading) { book in ReaderView(bookID: book.id, environment: environment) }
+    }
+
+    private var downloadButton: some View {
+        Button {
+            do { manager.enqueue(title: title, link: link, credentials: try model.credentials()) }
+            catch { self.error = error.localizedDescription }
+        } label: { Label("下载 \(format)", systemImage: "arrow.down.circle") }
     }
 }
