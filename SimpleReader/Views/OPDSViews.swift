@@ -16,7 +16,7 @@ struct ServersView: View {
                 NavigationLink(destination: CatalogView(server: server, url: server.url, environment: environment)) {
                     VStack(alignment: .leading, spacing: 5) { Text(server.name); Text(server.url.absoluteString).font(.caption).foregroundColor(.secondary).lineLimit(1) }
                 }
-                .swipeActions { Button("编辑") { editing = server }.tint(.blue); Button(role: .destructive) { delete(server) } label: { Label("删除", systemImage: "trash") } }
+                .swipeActions { Button("编辑") { editing = server }.tint(.accentColor); Button(role: .destructive) { delete(server) } label: { Label("删除", systemImage: "trash") } }
             }
         }.navigationTitle("在线书库")
         .toolbar {

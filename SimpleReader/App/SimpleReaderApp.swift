@@ -30,7 +30,9 @@ import SwiftUI
     @StateObject private var bootstrap = Bootstrap()
     var body: some Scene {
         WindowGroup {
-            if let environment = bootstrap.environment { RootView(environment: environment) }
+            if let environment = bootstrap.environment {
+                RootView(environment: environment).tint(.accentColor)
+            }
             else {
                 VStack(spacing: 16) {
                     Image(systemName: "externaldrive.badge.exclamationmark").font(.largeTitle)
