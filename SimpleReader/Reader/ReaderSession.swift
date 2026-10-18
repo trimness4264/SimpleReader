@@ -75,6 +75,7 @@ struct SyncPrompt: Identifiable {
     private var restorationRevision = 0
     private var isActive = true
     private var wasBackgrounded = false
+    private var reloadNavigatorOnRecovery = false
 
     init(bookID: UUID, store: LibraryStore, readium: ReadiumService, sync: SyncCoordinator) {
         self.bookID = bookID; self.store = store; self.readium = readium; self.sync = sync
@@ -394,15 +395,19 @@ struct SyncPrompt: Identifiable {
             } else {
                 // Preserve a turn whose debounced text capture has not finished yet.
                 // Never sample the navigator after its viewport has started changing.
-                if let locator = latestLocator, locator.jsonString != capturedLocator?.jsonString {
-                    saveChanged(ReadingPosition(progression: locator.locations.totalProgression ?? progression,
-                        locatorJSON: locator.jsonString, updatedAt: Date()))
-                }
+                savePendingLocation()
                 checkpoint = Checkpoint(position: current, locator: latestLocator, destination: pdfCheckpointDestination())
             }
         }
         isRestoring = true
         container.view.isUserInteractionEnabled = false
+    }
+    private func savePendingLocation() {
+        guard ready, !suppressChanges, !isRestoring, !isNavigating, !closed,
+              let locator = latestLocator, locator.jsonString != capturedLocator?.jsonString else { return }
+        // Persist the locator synchronously in case the process stops before text capture finishes.
+        saveChanged(ReadingPosition(progression: locator.locations.totalProgression ?? progression,
+            locatorJSON: locator.jsonString, updatedAt: Date()))
     }
     private func pdfCheckpointDestination() -> PDFDestination? {
         guard let pdf = pdf, let index = current?.pdfPage, let page = pdf.document?.page(at: index) else {
@@ -438,7 +443,7 @@ struct SyncPrompt: Identifiable {
         guard let checkpoint = checkpoint else { return }
         recoveryError = nil
         if let navigator = activeEPUB {
-            if wasBackgrounded {
+            if reloadNavigatorOnRecovery {
                 try installNavigator(publication: navigator.publication, locator: checkpoint.locator)
             }
             guard let navigator = activeEPUB, let location = checkpoint.locator else {
@@ -492,7 +497,7 @@ struct SyncPrompt: Identifiable {
         userHasMoved = false
         progression = checkpoint.position?.progression ?? progression
         self.checkpoint = nil
-        wasBackgrounded = false
+        reloadNavigatorOnRecovery = false
         isRestoring = false
         container.view.isUserInteractionEnabled = true
     }
@@ -599,26 +604,41 @@ struct SyncPrompt: Identifiable {
         await synchronize(flushFirst: false, applyRemote: false)
     }
     func resignActive() {
+        guard !closed else { return }
         isActive = false
-        protectPosition()
+        container.cancelPageTransition()
+        if isNavigating || (ready && suppressChanges) {
+            // An interrupted navigation still needs to return to its original position.
+            protectPosition()
+        } else {
+            // A live reader keeps its page when the app is merely interrupted.
+            restorationRevision += 1; restoration?.cancel()
+            navigationRevision += 1
+            savePendingLocation()
+        }
     }
     func background() async {
         guard !closed else { return }
         resignActive()
         wasBackgrounded = true
+        await flush()
         await synchronize(flushFirst: false, applyRemote: false)
     }
     func foreground() async {
         guard !closed else { return }
         isActive = true
         let shouldSync = wasBackgrounded
-        scheduleRestoration()
-        await restoration?.value
-        if shouldSync && !isRestoring && !closed { await synchronize() }
+        wasBackgrounded = false
+        if checkpoint != nil {
+            scheduleRestoration()
+            await restoration?.value
+        }
+        if shouldSync && isActive && !isRestoring && !closed { await synchronize() }
     }
     func retryRecovery() async {
         guard !closed else { return }
-        wasBackgrounded = true
+        protectPosition()
+        reloadNavigatorOnRecovery = true
         await foreground()
     }
     func turn(forward: Bool) async {
