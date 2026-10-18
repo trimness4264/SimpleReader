@@ -438,6 +438,8 @@ private final class ReaderSyncStub: ProgressSyncClient {
         try await Task.sleep(nanoseconds: 500_000_000)
         XCTAssertEqual(store.book(book.id)?.position, savedBeforeDrag, "An uncommitted page preview must not be persisted")
         container.finishPageTurn(translation: CGPoint(x: -20, y: 0), velocity: CGPoint(x: 900, y: 0))
+        XCTAssertFalse(container.beginPageTurn(translation: CGPoint(x: -80, y: 0)),
+                       "A new drag must not take a fractional offset from a settling page")
         try await Task.sleep(nanoseconds: 700_000_000)
         XCTAssertEqual(web.scrollView.contentOffset.x, originalOffset.x, accuracy: 1,
                        "Reversing the drag returns to its original page")
@@ -453,10 +455,18 @@ private final class ReaderSyncStub: ProgressSyncClient {
         }
         XCTAssertGreaterThan(checkScrollViews(navigator.view), 1, "Both chapter and WebView pans use the same page-turn owner")
         container.finishPageTurn(translation: CGPoint(x: -1200, y: 0))
+        XCTAssertFalse(container.beginPageTurn(translation: CGPoint(x: -80, y: 0)),
+                       "A committed page must finish settling and saving before another drag")
+        XCTAssertFalse(container.view.isUserInteractionEnabled, "Native pans must not interrupt a settling page")
         try await Task.sleep(nanoseconds: 700_000_000)
+        XCTAssertEqual(web.scrollView.contentOffset.x, originalOffset.x + web.bounds.width, accuracy: 1)
+        let visibleOffset = try await navigator.evaluateJavaScript("Math.abs(window.scrollX)").get() as? Double
+        XCTAssertEqual(try XCTUnwrap(visibleOffset), Double(abs(web.scrollView.contentOffset.x)), accuracy: 1,
+                       "WebKit must display the same complete page that UIKit has settled on")
         XCTAssertEqual(navigator.currentLocation?.href, next.href)
         XCTAssertEqual(navigator.currentLocation?.locations.progression, next.locations.progression)
         XCTAssertFalse(container.isPageTurnGestureActive)
+        XCTAssertTrue(container.view.isUserInteractionEnabled)
         container.finishPageTurn(translation: CGPoint(x: 1200, y: 0))
         try await Task.sleep(nanoseconds: 700_000_000)
         XCTAssertEqual(navigator.currentLocation?.locations.progression, initial.locations.progression)
@@ -469,6 +479,66 @@ private final class ReaderSyncStub: ProgressSyncClient {
         XCTAssertEqual(navigator.currentLocation?.locations.progression, initial.locations.progression)
         XCTAssertEqual(navigator.view.transform, .identity)
         XCTAssertEqual(container.view.subviews.count, 1, "A cancelled turn must leave only the reader content")
+    }
+
+    func testSettlingPageRejectsOverlappingDragAndCancellationRestoresOrigin() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene), container = ReaderContainerController()
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let child = UIViewController(), web = WKWebView()
+        child.view = web
+        container.replaceChild(with: child)
+        container.canTurnPage = { true }
+        let width = web.scrollView.bounds.width
+        web.loadHTMLString("""
+            <!doctype html><html><head>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>html, body { margin: 0; } body { width: 300vw; height: 100vh; }</style>
+            </head><body>Page drag fixture</body></html>
+            """, baseURL: nil)
+        for _ in 0..<200 {
+            if !web.isLoading && web.scrollView.contentSize.width >= width * 3 - 1 { break }
+            try await Task.sleep(nanoseconds: 16_000_000)
+        }
+        XCTAssertGreaterThanOrEqual(web.scrollView.contentSize.width, width * 3 - 1)
+        var settlements: [Bool] = []
+        container.onPageTurnSettled = { settlements.append($0) }
+
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -140, y: 0)))
+        container.updatePageTurn(translation: CGPoint(x: -140, y: 0))
+        container.finishPageTurn(translation: CGPoint(x: -140, y: 0), velocity: CGPoint(x: -900, y: 0))
+        XCTAssertFalse(container.beginPageTurn(translation: CGPoint(x: -80, y: 0)))
+        XCTAssertFalse(container.view.isUserInteractionEnabled)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        container.cancelPageTransition()
+        XCTAssertEqual(web.scrollView.contentOffset.x, 0, accuracy: 1)
+        XCTAssertFalse(container.isPageTurnGestureActive)
+        XCTAssertTrue(container.view.isUserInteractionEnabled)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(web.scrollView.contentOffset.x, 0, accuracy: 1,
+                       "A cancelled animation must not resume and leave a partial page")
+        XCTAssertTrue(settlements.isEmpty)
+
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -140, y: 0)))
+        container.finishPageTurn(translation: CGPoint(x: -140, y: 0), velocity: CGPoint(x: -900, y: 0))
+        container.cancelPageTransition()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(web.scrollView.contentOffset.x, 0, accuracy: 1,
+                       "Cancellation before the settle task starts must also preserve the original page")
+        XCTAssertTrue(settlements.isEmpty)
+
+        XCTAssertTrue(container.beginPageTurn(translation: CGPoint(x: -140, y: 0)))
+        container.finishPageTurn(translation: CGPoint(x: -140, y: 0), velocity: CGPoint(x: -900, y: 0))
+        for _ in 0..<100 {
+            if !container.isPageTurnGestureActive { break }
+            try await Task.sleep(nanoseconds: 16_000_000)
+        }
+        XCTAssertEqual(web.scrollView.contentOffset.x, width, accuracy: 1)
+        XCTAssertEqual(settlements, [true])
+        XCTAssertFalse(container.isPageTurnGestureActive)
+        XCTAssertTrue(container.view.isUserInteractionEnabled)
     }
 
     func testPageTurnRecognizesQuickSwipeAndCancelsReversal() {

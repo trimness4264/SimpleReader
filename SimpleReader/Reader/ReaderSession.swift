@@ -378,7 +378,7 @@ struct SyncPrompt: Identifiable {
         container.canTurnPage = { [weak self, weak navigator] in
             guard let self = self, let navigator = navigator else { return false }
             return self.ready && !self.closed && self.isActive && !self.suppressChanges
-                && !self.turningPage && !self.isRestoring && publication.metadata.layout != .fixed
+                && !self.turningPage && !self.isRestoring && !self.isNavigating && publication.metadata.layout != .fixed
                 && !navigator.settings.scroll && navigator.currentSelection == nil
         }
     }
@@ -622,7 +622,8 @@ struct SyncPrompt: Identifiable {
         await foreground()
     }
     func turn(forward: Bool) async {
-        guard ready, !closed, !suppressChanges, !isRestoring, !isNavigating, !turningPage else { return }
+        guard ready, !closed, !suppressChanges, !isRestoring, !isNavigating, !turningPage,
+              !container.isPageTurnGestureActive else { return }
         turningPage = true
         defer { turningPage = false }
         navigationRevision += 1
@@ -1068,7 +1069,8 @@ private final class ReaderContainerView: UIView {
     }
 
     func beginPageTurn(translation: CGPoint) -> Bool {
-        guard pageSnapshot == nil, canTurnPage?() == true, abs(translation.x) > abs(translation.y) else { return false }
+        guard !isPageTurnGestureActive, pageSnapshot == nil, canTurnPage?() == true,
+              abs(translation.x) > abs(translation.y) else { return false }
         isPageTurnGestureActive = true
         // Readium reports location only after scrolling settles. Invalidate an
         // in-flight sync now, before it can restore a distant remote position.
@@ -1116,9 +1118,12 @@ private final class ReaderContainerView: UIView {
             if commit { onPageTurn?(projected < 0) }
             return
         }
+        // Once this pan ends, its failure dependencies would allow Readium's
+        // native pans to start during the asynchronous settle and anchor capture.
+        view.isUserInteractionEnabled = false
         let revision = pageTransitionRevision
         Task { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, revision == self.pageTransitionRevision else { return }
             let target = commit ? drag.destination : drag.origin
             await self.settlePageDrag(drag, target: target, velocity: velocity.x)
             guard revision == self.pageTransitionRevision else { return }
@@ -1135,12 +1140,14 @@ private final class ReaderContainerView: UIView {
             }
             if commit && (drag.crossesChapter || drag.scroll == nil && drag.destination != drag.origin) {
                 self.pageDrag = nil
+                self.view.isUserInteractionEnabled = true
                 self.isPageTurnGestureActive = false
                 self.onPageTurn?(projected < 0)
             } else {
                 await self.onPageTurnSettled?(commit && drag.scroll != nil)
                 guard revision == self.pageTransitionRevision else { return }
                 self.pageDrag = nil
+                self.view.isUserInteractionEnabled = true
                 self.isPageTurnGestureActive = false
             }
         }
@@ -1210,22 +1217,27 @@ private final class ReaderContainerView: UIView {
     }
 
     private func settlePageDrag(_ drag: PageDrag, target: CGPoint, velocity: CGFloat) async {
-        let distance = abs((drag.scroll?.contentOffset.x ?? drag.origin.x) - target.x)
+        let revision = pageTransitionRevision
+        let origin = drag.scroll?.contentOffset ?? drag.origin
+        let transform = pageContent?.transform ?? .identity
+        let distance = abs(origin.x - target.x)
         let duration = min(0.4, max(0.16, distance / max(abs(velocity), 900)))
-        let remaining = max(distance, 1)
-        let initialSlope = min(2, abs(velocity) * duration / remaining)
-        let timing = UICubicTimingParameters(controlPoint1: CGPoint(x: 0.2, y: initialSlope * 0.2), controlPoint2: CGPoint(x: 0.36, y: 1))
-        let animator = UIViewPropertyAnimator(duration: UIAccessibility.isReduceMotionEnabled ? 0 : duration, timingParameters: timing)
-        pageAnimator = animator
-        animator.addAnimations {
-            drag.scroll?.contentOffset = target
-            self.pageContent?.transform = .identity
+        let start = CACurrentMediaTime()
+        // Update WebKit's actual scroll offsets on each frame so the DOM and
+        // visible page agree before the settled text position is captured.
+        while revision == pageTransitionRevision {
+            let progress = UIAccessibility.isReduceMotionEnabled ? 1 : min(1, (CACurrentMediaTime() - start) / duration)
+            let fraction = CGFloat(1 - pow(1 - progress, 3))
+            UIView.performWithoutAnimation {
+                drag.scroll?.setContentOffset(CGPoint(x: origin.x + (target.x - origin.x) * fraction,
+                                                      y: origin.y + (target.y - origin.y) * fraction), animated: false)
+                self.pageContent?.transform = CGAffineTransform(translationX: transform.tx * (1 - fraction),
+                                                               y: transform.ty * (1 - fraction))
+            }
+            if progress >= 1 { return }
+            do { try await Task.sleep(nanoseconds: 16_000_000) }
+            catch { return }
         }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            animator.addCompletion { _ in continuation.resume() }
-            animator.startAnimation()
-        }
-        if pageAnimator === animator { pageAnimator = nil }
     }
 
     func cancelPageTransition() {
@@ -1243,6 +1255,7 @@ private final class ReaderContainerView: UIView {
             drag.chapterScroll?.setContentOffset(drag.chapterOrigin, animated: false)
         }
         pageDrag = nil
+        if isPageTurnGestureActive { view.isUserInteractionEnabled = true }
         isPageTurnGestureActive = false
         committedPreview = false
         pageSnapshot = nil
