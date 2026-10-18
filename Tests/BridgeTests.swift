@@ -2,6 +2,7 @@ import XCTest
 import WebKit
 import PDFKit
 import SwiftUI
+import Combine
 import ReadiumShared
 import ReadiumNavigator
 @testable import SimpleReader
@@ -965,7 +966,65 @@ private final class ReaderSyncStub: ProgressSyncClient {
         return result as? Bool == true
     }
 
-    func testForegroundRestoresBlankEPUBWithoutChangingCheckpoint() async throws {
+    func testForegroundKeepsLiveEPUBWithoutRestoration() async throws {
+        for layout in [ReadingLayout.paginated, .scroll] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
+            var settings = store.settings; settings.reader.layout = layout; try store.saveSettings(settings)
+            let book = try await BookImportService(store: store, readium: readium).importBook(from: fixture("sample.epub"))
+            let sync = SyncCoordinator(store: store, http: HTTPClient())
+            let session = ReaderSession(bookID: book.id, store: store, readium: readium, sync: sync)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = session.container; window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            await session.load()
+            await session.go(try XCTUnwrap(session.contents.last))
+            var checkpoint = try XCTUnwrap(store.book(book.id))
+            let saved = try XCTUnwrap(checkpoint.position)
+            checkpoint.pendingSync = false; try store.save(checkpoint)
+            let original = try XCTUnwrap(session.container.children.first)
+            let navigator = try XCTUnwrap(original as? EPUBReadingNavigator)
+            _ = try await navigator.evaluateJavaScript("window.simpleReaderResumeToken = 'live'").get()
+            var restorationStates: [Bool] = []
+            let observation = session.$isRestoring.sink { restorationStates.append($0) }
+            defer { observation.cancel() }
+
+            for _ in 0..<3 {
+                session.resignActive()
+                XCTAssertFalse(session.isRestoring, "A brief interruption must not show the recovery overlay")
+                await session.foreground()
+                await session.background()
+                XCTAssertFalse(session.isRestoring, "Backgrounding must keep the live page")
+                await session.foreground()
+                XCTAssertTrue(session.container.children.first === original)
+                XCTAssertTrue(session.container.view.isUserInteractionEnabled)
+                let token = try await navigator.evaluateJavaScript("window.simpleReaderResumeToken").get() as? String
+                XCTAssertEqual(token, "live", "Returning to the app must preserve the existing document")
+                XCTAssertEqual(store.book(book.id)?.position, saved)
+                XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
+            }
+            XCTAssertFalse(restorationStates.contains(true), "Ordinary app switching must never start restoration")
+            XCTAssertNil(session.recoveryError)
+
+            // A new reader session models reopening after the process was killed.
+            let relaunched = ReaderSession(bookID: book.id, store: store, readium: readium, sync: sync)
+            window.rootViewController = relaunched.container
+            await relaunched.load()
+            XCTAssertTrue(relaunched.ready)
+            XCTAssertNil(relaunched.error)
+            let restored = try XCTUnwrap(relaunched.container.children.first as? EPUBReadingNavigator)
+            let visible = try await readingAnchorIsVisible(XCTUnwrap(saved.xpointer), in: restored)
+            XCTAssertTrue(visible, "A new process must reopen the saved paragraph")
+            XCTAssertEqual(store.book(book.id)?.position?.updatedAt, saved.updatedAt)
+            XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
+            await relaunched.close()
+            await session.close()
+        }
+    }
+
+    func testManualRecoveryRestoresBlankEPUBWithoutChangingCheckpoint() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
@@ -985,24 +1044,21 @@ private final class ReaderSyncStub: ProgressSyncClient {
         let saved = try XCTUnwrap(checkpoint.position)
         let original = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
 
-        session.resignActive()
-        await session.foreground()
-        XCTAssertTrue(session.container.children.first === original, "A brief interruption should retain the renderer")
-        await session.background()
         _ = try await original.evaluateJavaScript("document.body.replaceChildren() ").get()
-        await session.foreground()
+        await session.retryRecovery()
 
         XCTAssertFalse(session.isRestoring)
         XCTAssertNil(session.recoveryError)
         XCTAssertEqual(store.book(book.id)?.position, saved)
         XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
         let restored = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        XCTAssertFalse(restored === original, "Explicit recovery must rebuild the broken renderer")
         let visible = try await readingAnchorIsVisible(XCTUnwrap(saved.xpointer), in: restored)
         XCTAssertTrue(visible, "Returning to the foreground must render the saved paragraph without a page turn")
         await session.close()
     }
 
-    func testCloseCancelsForegroundRecovery() async throws {
+    func testCloseCancelsManualRecovery() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try LibraryStore(root: root, inMemory: true), readium = ReadiumService()
@@ -1016,8 +1072,7 @@ private final class ReaderSyncStub: ProgressSyncClient {
         await session.load()
         let saved = store.book(book.id)?.position
         let original = try XCTUnwrap(session.container.children.first)
-        await session.background()
-        let recovery = Task { await session.foreground() }
+        let recovery = Task { await session.retryRecovery() }
         await Task.yield()
         await session.close()
         await recovery.value
@@ -1049,13 +1104,19 @@ private final class ReaderSyncStub: ProgressSyncClient {
         let location = try XCTUnwrap(navigator.currentLocation)
         let pointer = try await EPUBPositionBridge.capture(navigator: navigator, locator: location)
         XCTAssertEqual(store.book(book.id)?.position, initial, "The save debounce must still be pending")
+        session.resignActive()
+        XCTAssertFalse(session.isRestoring)
+        XCTAssertGreaterThan(try XCTUnwrap(store.book(book.id)?.position).progression, initial.progression,
+                             "The locator must be saved before asynchronous background work")
         await session.background()
+        XCTAssertFalse(session.isRestoring)
         await session.foreground()
         XCTAssertNil(session.recoveryError)
         let saved = try XCTUnwrap(store.book(book.id)?.position)
         XCTAssertGreaterThan(saved.progression, initial.progression)
         XCTAssertNotNil(saved.xpointer, "The last turn must remain usable for KOReader Sync")
         let restored = try XCTUnwrap(session.container.children.first as? EPUBNavigatorViewController)
+        XCTAssertTrue(restored === navigator, "Saving a pending turn must not rebuild the reader")
         let visible = try await readingAnchorIsVisible(pointer, in: restored)
         XCTAssertTrue(visible)
         await session.close()
@@ -1094,6 +1155,16 @@ private final class ReaderSyncStub: ProgressSyncClient {
         checkpoint.pendingSync = false; try store.save(checkpoint)
         let pdf = try XCTUnwrap(session.container.view.subviews.compactMap { $0 as? PDFView }.first)
         let page = try XCTUnwrap(pdf.document?.page(at: 3))
+        let destination = pdf.currentDestination
+        session.resignActive()
+        XCTAssertFalse(session.isRestoring, "A PDF interruption must not start restoration")
+        await session.foreground()
+        await session.background()
+        XCTAssertFalse(session.isRestoring)
+        await session.foreground()
+        XCTAssertEqual(pdf.currentDestination?.point, destination?.point, "App switching must preserve the PDF viewport")
+        XCTAssertEqual(store.book(book.id)?.position, saved)
+        XCTAssertFalse(try XCTUnwrap(store.book(book.id)).pendingSync)
         for size in [CGSize(width: 1000, height: 650), CGSize(width: 390, height: 700)] {
             session.container.view.frame.size = size
             session.container.view.setNeedsLayout(); session.container.view.layoutIfNeeded()
