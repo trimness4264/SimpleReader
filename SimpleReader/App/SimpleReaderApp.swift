@@ -9,13 +9,13 @@ import SwiftUI
     let downloads: DownloadManager
     let opds: OPDSClient
     let sync: SyncCoordinator
-    init() throws {
-        store = try LibraryStore()
-        importer = BookImportService(store: store, readium: readium)
+    init(store: LibraryStore? = nil, transfer: DownloadManager.Transfer? = nil) throws {
+        self.store = try store ?? LibraryStore()
+        importer = BookImportService(store: self.store, readium: readium)
         sharedImports = SharedBookImportCoordinator(importer: importer)
-        downloads = DownloadManager(http: http, importer: importer)
+        downloads = DownloadManager(http: http, importer: importer, transfer: transfer)
         opds = OPDSClient(http: http)
-        sync = SyncCoordinator(store: store, http: http)
+        sync = SyncCoordinator(store: self.store, http: http)
     }
 }
 @MainActor final class Bootstrap: ObservableObject {

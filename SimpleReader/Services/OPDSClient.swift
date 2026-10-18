@@ -1,6 +1,6 @@
 import Foundation
 
-struct OPDSLink: Equatable {
+struct OPDSLink: Hashable {
     let url: URL
     let rel: String
     let type: String
