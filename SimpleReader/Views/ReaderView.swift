@@ -75,6 +75,7 @@ struct ReaderView: View {
             ReaderContentsView(session: session)
         }
         .sheet(isPresented: $showPageJump) { PDFPageJumpView(session: session) }
+        .sheet(isPresented: $showPreferences) { preferencesPanel }
         .alert(item: $session.prompt) { prompt in
             let percentage = Int((prompt.remote.percentage ?? 0)*100)
             switch prompt.kind {
@@ -146,7 +147,6 @@ struct ReaderView: View {
                 if store.book(session.bookID)?.format == .epub {
                     Button { showPreferences = true } label: { Image(systemName: "textformat.size").frame(width: 44, height: 44) }
                         .accessibilityLabel("阅读设置").disabled(!session.ready || session.isNavigating)
-                        .popover(isPresented: $showPreferences) { preferencesPanel }
                 } else {
                     Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
                 }
