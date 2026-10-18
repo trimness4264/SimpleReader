@@ -55,7 +55,7 @@ struct RootView: View {
                 NavigationView { LibraryView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("书库", systemImage: "books.vertical") }.tag(0)
                 NavigationView { ServersView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("在线书库", systemImage: "network") }.tag(1)
                 NavigationView { SettingsView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("设置", systemImage: "gearshape") }.tag(2)
-            }.accentColor(Color(red: 0.19, green: 0.39, blue: 0.34))
+            }
         }
     }
     private var sidebar: some View {
