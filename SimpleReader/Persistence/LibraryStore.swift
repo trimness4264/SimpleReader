@@ -60,8 +60,20 @@ import CoreData
         if let index = books.firstIndex(where: { $0.id == book.id }) { books[index] = book }
         else { books.append(book) }
     }
-    func saveSettings(_ settings: AppSettings) throws {
-        try write(settings, key: "settings"); self.settings = settings
+    func saveSettings(_ settings: AppSettings, resettingSyncBaselines: Bool = false) throws {
+        let updatedBooks: [Book] = resettingSyncBaselines ? books.map { book in
+            var updated = book
+            updated.remoteBaseline = nil
+            return updated
+        } : []
+        let context = container.viewContext
+        do {
+            for book in updatedBooks { try stage(book, key: book.id.uuidString) }
+            try stage(settings, key: "settings")
+            try context.save()
+        } catch { context.rollback(); throw error }
+        self.settings = settings
+        if resettingSyncBaselines { books = updatedBooks }
     }
     private func record(_ key: String) throws -> NSManagedObject? {
         let request = NSFetchRequest<NSManagedObject>(entityName: "Record")
@@ -69,13 +81,17 @@ import CoreData
         return try container.viewContext.fetch(request).first
     }
     private func write<T: Encodable>(_ value: T, key: String) throws {
-        let data = try JSONEncoder().encode(value)
         let context = container.viewContext
         do {
-            let object = try record(key) ?? NSEntityDescription.insertNewObject(forEntityName: "Record", into: context)
-            object.setValue(key, forKey: "key"); object.setValue(data, forKey: "payload")
+            try stage(value, key: key)
             try context.save()
         } catch { context.rollback(); throw error }
+    }
+    private func stage<T: Encodable>(_ value: T, key: String) throws {
+        let data = try JSONEncoder().encode(value)
+        let object = try record(key) ?? NSEntityDescription.insertNewObject(forEntityName: "Record", into: container.viewContext)
+        object.setValue(key, forKey: "key")
+        object.setValue(data, forKey: "payload")
     }
     func delete(_ book: Book) throws {
         try delete([book])

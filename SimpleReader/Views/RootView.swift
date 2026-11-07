@@ -42,8 +42,12 @@ struct RootView: View {
                 NavigationSplitView {
                     sidebar
                 } detail: {
-                    NavigationStack { selectedContent }.id(selectedTab)
-                }.navigationSplitViewStyle(.balanced)
+                    NavigationStack { selectedContent }
+                }
+                .navigationSplitViewStyle(.balanced)
+                // iPadOS 17 can retain pushed destinations in the split view itself.
+                // Reset the whole navigation container when switching sidebar sections.
+                .id(selectedTab)
             } else {
                 NavigationView {
                     sidebar

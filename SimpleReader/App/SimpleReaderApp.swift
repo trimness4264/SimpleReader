@@ -8,6 +8,7 @@ import SwiftUI
     let sharedImports: SharedBookImportCoordinator
     let downloads: DownloadManager
     let opds: OPDSClient
+    let accounts: AccountSettings
     let sync: SyncCoordinator
     init(store: LibraryStore? = nil, transfer: DownloadManager.Transfer? = nil) throws {
         self.store = try store ?? LibraryStore()
@@ -15,7 +16,8 @@ import SwiftUI
         sharedImports = SharedBookImportCoordinator(importer: importer)
         downloads = DownloadManager(http: http, importer: importer, transfer: transfer)
         opds = OPDSClient(http: http)
-        sync = SyncCoordinator(store: self.store, http: http)
+        accounts = AccountSettings(store: self.store, http: http)
+        sync = SyncCoordinator(store: self.store, http: http, accounts: accounts)
     }
 }
 @MainActor final class Bootstrap: ObservableObject {
