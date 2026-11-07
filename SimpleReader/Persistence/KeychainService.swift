@@ -6,10 +6,13 @@ enum KeychainService {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "SimpleReader", kSecAttrAccount as String: key]
     }
     static func read(_ key: String) throws -> String {
+        try storedValue(key) ?? ""
+    }
+    static func storedValue(_ key: String) throws -> String? {
         var q = query(key); q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &result)
-        if status == errSecItemNotFound { return "" }
+        if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
             throw AppFailure("无法读取安全凭据（\(status)）")
         }
@@ -27,5 +30,10 @@ enum KeychainService {
         }
         guard status == errSecSuccess else { throw AppFailure("无法保存安全凭据（\(status)）") }
     }
-    static func delete(_ key: String) { SecItemDelete(query(key) as CFDictionary) }
+    static func delete(_ key: String) throws {
+        let status = SecItemDelete(query(key) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw AppFailure("无法删除安全凭据（\(status)）")
+        }
+    }
 }

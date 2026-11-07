@@ -7,6 +7,7 @@ import ReadiumNavigator
     var publication: Publication { get }
     var currentLocation: Locator? { get }
     func evaluateJavaScript(_ script: String) async -> Result<Any, Error>
+    func locator(for anchor: EPUBTextAnchor, in link: Link) throws -> Locator
     func go(to locator: Locator, options: NavigatorGoOptions) async -> Bool
     func go(to link: Link, options: NavigatorGoOptions) async -> Bool
 }
@@ -14,6 +15,7 @@ import ReadiumNavigator
 extension EPUBNavigatorViewController: EPUBReadingNavigator {}
 
 extension EPUBReadingNavigator {
+    func locator(for anchor: EPUBTextAnchor, in link: Link) throws -> Locator { try anchor.locator(in: link) }
     func go(to locator: Locator) async -> Bool { await go(to: locator, options: .init(animated: false)) }
     func go(to link: Link) async -> Bool { await go(to: link, options: .init(animated: false)) }
 }
@@ -93,7 +95,7 @@ extension EPUBReadingNavigator {
             webView.stopLoading()
             webView.navigationDelegate = nil
             webView.configuration.userContentController.removeScriptMessageHandler(forName: "continuousChapterHeight")
-            webView.removeFromSuperview()
+            webView.superview?.removeFromSuperview()
         }
         webViews.removeAll()
         server.close()
@@ -206,7 +208,10 @@ extension EPUBReadingNavigator {
         webView.scrollView.bounces = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webViews[index] = webView
-        scrollView.addSubview(webView)
+        let clip = UIView()
+        clip.clipsToBounds = true
+        clip.addSubview(webView)
+        scrollView.addSubview(clip)
         layoutChapters()
         webView.load(URLRequest(url: server.url(for: publication.readingOrder[index].href)))
     }
@@ -221,7 +226,7 @@ extension EPUBReadingNavigator {
             webViews[i]?.stopLoading()
             webViews[i]?.navigationDelegate = nil
             webViews[i]?.configuration.userContentController.removeScriptMessageHandler(forName: "continuousChapterHeight")
-            webViews[i]?.removeFromSuperview()
+            webViews[i]?.superview?.removeFromSuperview()
             webViews.removeValue(forKey: i)
             loaded.remove(i)
             failures.removeValue(forKey: i)
@@ -240,10 +245,23 @@ extension EPUBReadingNavigator {
         return max(0, heights.count - 1)
     }
     private func layoutChapters() {
-        for (index, webView) in webViews {
-            webView.frame = CGRect(x: 0, y: origin(of: index), width: width, height: heights[index])
-        }
         scrollView.contentSize = CGSize(width: width, height: heights.reduce(0, +))
+        layoutVisibleChapters()
+    }
+
+    private func layoutVisibleChapters() {
+        let viewportHeight = scrollView.bounds.height
+        for (index, webView) in webViews {
+            // Chapter CSS may use vh. Its viewport must stay independent of the
+            // measured document height, even while the outer view scrolls.
+            let start = origin(of: index)
+            let offset = min(max(0, scrollView.contentOffset.y - start), max(0, heights[index] - viewportHeight))
+            webView.superview?.frame = CGRect(x: 0, y: start + offset, width: width, height: min(viewportHeight, heights[index]))
+            webView.frame = CGRect(x: 0, y: 0, width: width, height: viewportHeight)
+            if webView.scrollView.contentOffset.y != offset {
+                webView.scrollView.contentOffset = CGPoint(x: 0, y: offset)
+            }
+        }
     }
 
     fileprivate func measuredHeight(index: Int, height: CGFloat, webView: WKWebView?) {
@@ -270,6 +288,7 @@ extension EPUBReadingNavigator {
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        layoutVisibleChapters()
         guard started, !navigating, !closed, !updatingLayout else { return }
         retainChapters(around: visibleIndex())
         reportLocation()
@@ -321,9 +340,16 @@ extension EPUBReadingNavigator {
             let webView = try await waitForChapter(index)
             let top = max(0, scrollView.contentOffset.y - origin(of: index))
             let bottom = min(heights[index], scrollView.contentOffset.y + scrollView.bounds.height - origin(of: index))
-            let prefix = "window.SimpleReaderViewport={top:\(top),bottom:\(max(top, bottom))};\n"
+            let prefix = "window.SimpleReaderViewport={top:\(top)-window.scrollY,bottom:\(max(top, bottom))-window.scrollY};\n"
             return .success(try await webView.evaluateJavaScript(prefix + script) as Any)
         } catch { return .failure(error) }
+    }
+
+    func locator(for anchor: EPUBTextAnchor, in link: Link) throws -> Locator {
+        var locations: [String: Any] = [:]
+        locations["continuousTextNodeIndex"] = anchor.textNodeIndex
+        locations["continuousTextOffset"] = anchor.textOffset
+        return try anchor.locator(in: link, additionalLocations: locations)
     }
 
     func go(to link: Link, options: NavigatorGoOptions) async -> Bool {
@@ -363,20 +389,22 @@ extension EPUBReadingNavigator {
                 const node=element.childNodes[location.textNodeIndex];
                 if(node?.nodeType===Node.TEXT_NODE && Number.isFinite(location.textOffset)) {
                   const range=document.createRange();const offset=Math.min(node.length,location.textOffset);
-                  range.setStart(node,offset);range.setEnd(node,Math.min(node.length,offset+1));return range.getBoundingClientRect().top;
+                  range.setStart(node,offset);range.setEnd(node,Math.min(node.length,offset+1));return window.scrollY + range.getBoundingClientRect().top;
                 }
                 if(location.highlight) {
                   const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);let node;
-                  while(node=walker.nextNode()) {const index=node.data.indexOf(location.highlight);if(index>=0){const range=document.createRange();range.setStart(node,index);range.setEnd(node,Math.min(node.length,index+1));return range.getBoundingClientRect().top;}}
+                  while(node=walker.nextNode()) {const index=node.data.indexOf(location.highlight);if(index>=0){const range=document.createRange();range.setStart(node,index);range.setEnd(node,Math.min(node.length,index+1));return window.scrollY + range.getBoundingClientRect().top;}}
                 }
-                return element.getBoundingClientRect().top;
+                return window.scrollY + element.getBoundingClientRect().top;
               }
               return Math.max(0,document.body.scrollHeight*location.progression);
             })();
             """
             let localY = try await webView.evaluateJavaScript(script) as? Double ?? 0
             guard !closed, revision == navigationRevision else { return false }
-            let offset = min(max(0, origin(of: index) + CGFloat(localY)), max(0, scrollView.contentSize.height - scrollView.bounds.height))
+            let offset = min(max(0, origin(of: index) + CGFloat(localY)), max(0, scrollView.contentSize.height - 1))
+            // Reserve only the space needed to align this anchor in a short final chapter.
+            scrollView.contentInset.bottom = max(0, offset + scrollView.bounds.height - scrollView.contentSize.height)
             scrollView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
             currentLocation = locator
             onLocationChanged?(locator)

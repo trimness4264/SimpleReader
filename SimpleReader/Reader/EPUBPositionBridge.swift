@@ -99,7 +99,9 @@ import WebKit
         guard let pointer = value as? String else { throw AppFailure("无法获取 EPUB 阅读位置") }
         return pointer
     }
-    static func locator(pointer: String, navigator: EPUBReadingNavigator, spine: [String]? = nil) async throws -> Locator {
+    static func locator(pointer: String, navigator: EPUBReadingNavigator, spine: [String]? = nil, isCurrent: () -> Bool) async throws -> Locator {
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
         let index = try spineIndex(pointer)
         let hrefs = spine ?? navigator.publication.readingOrder.map(\.href)
         guard hrefs.indices.contains(index) else { throw AppFailure("远端章节不在本书中，请检查两端图书版本") }
@@ -108,27 +110,20 @@ import WebKit
         var lastError: Error = AppFailure("EPUB 章节尚未加载")
         for _ in 0..<20 {
             try Task.checkCancellation()
+            guard isCurrent() else { throw CancellationError() }
             do {
                 guard navigator.currentLocation?.href.string.components(separatedBy: "#")[0] == link.href.components(separatedBy: "#")[0] else { throw AppFailure("正在切换章节") }
                 let value = try await navigator.evaluateJavaScript("\(try source)\nwindow.SimpleReaderBridge.resolve(\(try quoted(pointer)));").get()
-                guard let result = value as? [String: Any], let selector = result["cssSelector"] as? String else { throw AppFailure("无法解析远端正文位置") }
-                var locations: [String: Any] = ["cssSelector": selector]
-                if navigator is ContinuousEPUBController {
-                    locations["continuousTextNodeIndex"] = result["textNodeIndex"]
-                    locations["continuousTextOffset"] = result["textOffset"]
-                }
-                var json: [String: Any] = ["href": link.href, "type": link.mediaType?.string ?? "application/xhtml+xml", "locations": locations]
-                if let highlight = result["highlight"] as? String, !highlight.isEmpty {
-                    json["text"] = ["highlight": highlight, "before": result["before"] as? String ?? "", "after": result["after"] as? String ?? ""]
-                } else {
-                    // Readium 3.8 dispatches selector navigation only when highlight
-                    // is non-nil. An empty quote takes its JS element-selector path,
-                    // allowing images/SVG/body to navigate without fabricated text.
-                    json["text"] = ["highlight": ""]
-                }
-                guard let locator = try Locator(json: json) else { throw AppFailure("无法生成 Readium 定位") }
-                return locator
-            } catch { lastError = error; try await Task.sleep(nanoseconds: 100_000_000) }
+                try Task.checkCancellation()
+                guard isCurrent() else { throw CancellationError() }
+                guard let result = value as? [String: Any] else { throw AppFailure("无法解析远端正文位置") }
+                return try navigator.locator(for: EPUBTextAnchor(result: result), in: link)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
         }
         throw lastError
     }

@@ -58,21 +58,20 @@ enum SyncDecision: Equatable {
     enum Outcome { case idle, remote(RemoteProgress), conflict(RemoteProgress) }
     @Published private(set) var status = "尚未同步"
     private let store: LibraryStore
-    private let http: HTTPClient
+    private let accounts: AccountSettings
     private var active: Set<UUID> = []
     private let clientFactory: (() throws -> ProgressSyncClient)?
-    init(store: LibraryStore, http: HTTPClient, clientFactory: (() throws -> ProgressSyncClient)? = nil) { self.store = store; self.http = http; self.clientFactory = clientFactory }
-    func makeClient() throws -> KOReaderSyncClient {
-        let config = store.settings.sync
-        guard !config.username.isEmpty else { throw AppFailure("请设置 KOReader Sync 账号") }
-        return KOReaderSyncClient(settings: config, password: try KeychainService.read("kosync"), http: http)
+    init(store: LibraryStore, http: HTTPClient, accounts: AccountSettings? = nil, clientFactory: (() throws -> ProgressSyncClient)? = nil) {
+        self.store = store
+        self.accounts = accounts ?? AccountSettings(store: store, http: http)
+        self.clientFactory = clientFactory
     }
     func document(_ book: Book) -> String { store.settings.sync.filenameMatching ? book.identity.filenameMD5 : book.identity.partialMD5 }
     func synchronize(_ id: UUID, preferLocal: Bool = false) async throws -> Outcome {
         guard store.settings.sync.enabled, !active.contains(id) else { return .idle }
         active.insert(id); defer { active.remove(id) }
         do {
-            let client: ProgressSyncClient = try clientFactory?() ?? makeClient()
+            let client: ProgressSyncClient = try clientFactory?() ?? accounts.syncClient()
             guard let initial = store.book(id) else { return .idle }
             let configuration = store.settings.sync
             let identity = document(initial)

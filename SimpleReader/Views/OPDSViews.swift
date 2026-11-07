@@ -25,17 +25,17 @@ struct ServersView: View {
                 Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("添加服务器")
             }
         }
-        .sheet(isPresented: $adding) { ServerEditor(store: store, server: nil) }
-        .sheet(item: $editing) { ServerEditor(store: store, server: $0) }
+        .sheet(isPresented: $adding) { ServerEditor(accounts: environment.accounts, server: nil) }
+        .sheet(item: $editing) { ServerEditor(accounts: environment.accounts, server: $0) }
         .errorAlert($error)
     }
     private func delete(_ server: OPDSServer) {
-        do { var settings = store.settings; settings.servers.removeAll { $0.id == server.id }; try store.saveSettings(settings); KeychainService.delete("opds-\(server.id)") }
+        do { try environment.accounts.deleteServer(server) }
         catch { self.error = error.localizedDescription }
     }
 }
 struct ServerEditor: View {
-    @ObservedObject var store: LibraryStore
+    let accounts: AccountSettings
     let server: OPDSServer?
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
@@ -43,8 +43,8 @@ struct ServerEditor: View {
     @State private var username: String
     @State private var password = ""
     @State private var error: String?
-    init(store: LibraryStore, server: OPDSServer?) {
-        self.store = store; self.server = server
+    init(accounts: AccountSettings, server: OPDSServer?) {
+        self.accounts = accounts; self.server = server
         _name = State(initialValue: server?.name ?? "Calibre")
         _address = State(initialValue: server?.url.absoluteString ?? "")
         _username = State(initialValue: server?.username ?? "")
@@ -64,21 +64,11 @@ struct ServerEditor: View {
                 ToolbarItem(placement: .navigationBarLeading) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) { Button("保存") { save() }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || address.isEmpty) }
             }
-        }.navigationViewStyle(.stack).task { if let server = server { do { password = try KeychainService.read("opds-\(server.id)") } catch { self.error = error.localizedDescription } } }.errorAlert($error)
+        }.navigationViewStyle(.stack).task { if let server = server { do { password = try accounts.password(for: server) } catch { self.error = error.localizedDescription } } }.errorAlert($error)
     }
     private func save() {
         do {
-            guard let url = URL(string: address.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw AppFailure("服务器地址无效") }
-            try NetworkPolicy.validate(url)
-            let record = OPDSServer(id: server?.id ?? UUID(), name: name, url: url, username: username)
-            let key = "opds-\(record.id)"
-            let old = try KeychainService.read(key)
-            try KeychainService.save(password, key: key)
-            do {
-                var settings = store.settings
-                if let index = settings.servers.firstIndex(where: { $0.id == record.id }) { settings.servers[index] = record } else { settings.servers.append(record) }
-                try store.saveSettings(settings)
-            } catch { try? KeychainService.save(old, key: key); throw error }
+            try accounts.saveServer(server, name: name, address: address, username: username, password: password)
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
@@ -92,10 +82,13 @@ struct ServerEditor: View {
     let server: OPDSServer
     let initialURL: URL
     let client: OPDSClient
+    private let accounts: AccountSettings
     private var searchLink: OPDSLink?
     private var visited: Set<URL> = []
-    init(server: OPDSServer, url: URL, client: OPDSClient) { self.server = server; initialURL = url; self.client = client }
-    func credentials() throws -> ServerCredentials { ServerCredentials(origin: server.url, username: server.username, password: try KeychainService.read("opds-\(server.id)")) }
+    init(server: OPDSServer, url: URL, client: OPDSClient, accounts: AccountSettings) {
+        self.server = server; initialURL = url; self.client = client; self.accounts = accounts
+    }
+    func credentials() throws -> ServerCredentials { try accounts.credentials(for: server) }
     var canSearch: Bool { searchLink != nil }
     func load(url: URL? = nil, append: Bool = false) async {
         guard !loading else { return }; loading = true; defer { loading = false }
@@ -121,7 +114,7 @@ struct CatalogView: View {
     let environment: AppEnvironment
     @StateObject private var model: CatalogModel
     init(server: OPDSServer, url: URL, environment: AppEnvironment) {
-        self.environment = environment; _model = StateObject(wrappedValue: CatalogModel(server: server, url: url, client: environment.opds))
+        self.environment = environment; _model = StateObject(wrappedValue: CatalogModel(server: server, url: url, client: environment.opds, accounts: environment.accounts))
     }
     var body: some View {
         VStack(spacing: 0) {

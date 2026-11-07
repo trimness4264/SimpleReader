@@ -113,32 +113,21 @@ private struct SyncEditor: View {
                 ToolbarItem(placement: .navigationBarLeading) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) { Button("保存") { save() }.disabled(checking) }
             }
-        }.navigationViewStyle(.stack).task { do { password = try KeychainService.read("kosync") } catch { self.error = error.localizedDescription } }.errorAlert($error)
-    }
-    private func config() throws -> SyncSettings {
-        guard let url = URL(string: address.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw AppFailure("同步服务器地址无效") }
-        try NetworkPolicy.validate(url)
-        if enabled && (username.isEmpty || password.isEmpty) { throw AppFailure("启用同步前请填写账号和密码") }
-        var settings = environment.store.settings.sync
-        settings.url = url; settings.username = username; settings.enabled = enabled; settings.filenameMatching = filenameMatching
-        return settings
+        }.navigationViewStyle(.stack).task { do { password = try environment.accounts.syncPassword() } catch { self.error = error.localizedDescription } }.errorAlert($error)
     }
     private func verify() async {
         checking = true; defer { checking = false }
-        do { let client = KOReaderSyncClient(settings: try config(), password: password, http: environment.http); try await client.authorize(); verification = "认证成功" }
+        do {
+            try await environment.accounts.verifySync(address: address, username: username, password: password,
+                enabled: enabled, filenameMatching: filenameMatching)
+            verification = "认证成功"
+        }
         catch { self.error = error.localizedDescription }
     }
     private func save() {
         do {
-            let config = try config(), store = environment.store
-            let old = try KeychainService.read("kosync")
-            try KeychainService.save(password, key: "kosync")
-            do {
-                var settings = store.settings
-                let changed = settings.sync.url != config.url || settings.sync.username != config.username || settings.sync.filenameMatching != config.filenameMatching
-                if changed { for var book in store.books { book.remoteBaseline = nil; try store.save(book) } }
-                settings.sync = config; try store.saveSettings(settings)
-            } catch { try? KeychainService.save(old, key: "kosync"); throw error }
+            try environment.accounts.saveSync(address: address, username: username, password: password,
+                enabled: enabled, filenameMatching: filenameMatching)
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
