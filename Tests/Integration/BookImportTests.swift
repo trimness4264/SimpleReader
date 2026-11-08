@@ -25,7 +25,7 @@ import XCTest
         do {
             _ = try await importer.importBook(from: source)
             XCTFail("A login page must not be imported as a book")
-        } catch { XCTAssertEqual(error.localizedDescription, "PDF 损坏、为空或已加密") }
+        } catch { XCTAssertEqual(error.localizedDescription, String(localized: "The PDF is damaged, empty, or encrypted.")) }
 
         XCTAssertTrue(store.books.isEmpty)
         for directory in ["Books", "Covers", "Staging"] {

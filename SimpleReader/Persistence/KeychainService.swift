@@ -14,7 +14,7 @@ enum KeychainService {
         let status = SecItemCopyMatching(q as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
-            throw AppFailure("无法读取安全凭据（\(status)）")
+            throw AppFailure("Couldn’t read secure credentials (\(status)).")
         }
         return value
     }
@@ -26,14 +26,14 @@ enum KeychainService {
             var item = q; item[kSecValueData as String] = data
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let added = SecItemAdd(item as CFDictionary, nil)
-            guard added == errSecSuccess else { throw AppFailure("无法保存安全凭据（\(added)）") }; return
+            guard added == errSecSuccess else { throw AppFailure("Couldn’t save secure credentials (\(added)).") }; return
         }
-        guard status == errSecSuccess else { throw AppFailure("无法保存安全凭据（\(status)）") }
+        guard status == errSecSuccess else { throw AppFailure("Couldn’t save secure credentials (\(status)).") }
     }
     static func delete(_ key: String) throws {
         let status = SecItemDelete(query(key) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw AppFailure("无法删除安全凭据（\(status)）")
+            throw AppFailure("Couldn’t delete secure credentials (\(status)).")
         }
     }
 }

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C11000000000000000000001 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = C11000000000000000000003 /* Localizable.strings */; };
+		C11000000000000000000002 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = C11000000000000000000004 /* InfoPlist.strings */; };
 		000000000000000000000029 /* SimpleReader/App/SimpleReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */; };
 		00000000000000000000002A /* SimpleReader/Models/Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000002 /* SimpleReader/Models/Models.swift */; };
 		00000000000000000000002B /* SimpleReader/Persistence/KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000003 /* SimpleReader/Persistence/KeychainService.swift */; };
@@ -68,6 +70,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C11000000000000000000005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "en"; path = "SimpleReader/Resources/en.lproj/Localizable.strings"; sourceTree = "<group>"; };
+		C11000000000000000000006 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "SimpleReader/Resources/zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
+		C11000000000000000000007 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "en"; path = "SimpleReader/Resources/en.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
+		C11000000000000000000008 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "SimpleReader/Resources/zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/App/SimpleReaderApp.swift; sourceTree = "<group>"; };
 		000000000000000000000002 /* SimpleReader/Models/Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Models/Models.swift; sourceTree = "<group>"; };
 		000000000000000000000003 /* SimpleReader/Persistence/KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Persistence/KeychainService.swift; sourceTree = "<group>"; };
@@ -178,6 +184,8 @@
 				000000000000000000000013 /* SimpleReader/Views/RootView.swift */,
 				000000000000000000000014 /* SimpleReader/Views/SettingsView.swift */,
 				000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */,
+				C11000000000000000000003 /* Localizable.strings */,
+				C11000000000000000000004 /* InfoPlist.strings */,
 				000000000000000000000062 /* SimpleReader/Resources/Fonts */,
 				000000000000000000000060 /* SimpleReader/Resources/Assets.xcassets */,
 				000000000000000000000019 /* SimpleReader/Resources/LICENSE.txt */,
@@ -262,11 +270,11 @@
 			};
 			buildConfigurationList = 00000000000000000000004A /* Build configuration list for PBXProject "SimpleReader" */;
 			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = zh_CN;
+			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
-				zh_CN,
+				"zh-Hans",
 				Base,
 			);
 			mainGroup = 000000000000000000000021;
@@ -289,6 +297,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000042 /* SimpleReader/Resources/EPUBPositionBridge.js in Resources */,
+				C11000000000000000000001 /* Localizable.strings in Resources */,
+				C11000000000000000000002 /* InfoPlist.strings in Resources */,
 				000000000000000000000063 /* SimpleReader/Resources/Fonts in Resources */,
 				000000000000000000000061 /* SimpleReader/Resources/Assets.xcassets in Resources */,
 				000000000000000000000043 /* SimpleReader/Resources/LICENSE.txt in Resources */,
@@ -306,6 +316,11 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		C11000000000000000000003 /* Localizable.strings */ = {isa = PBXVariantGroup; children = (C11000000000000000000005 /* en */, C11000000000000000000006 /* zh-Hans */); name = Localizable.strings; sourceTree = "<group>"; };
+		C11000000000000000000004 /* InfoPlist.strings */ = {isa = PBXVariantGroup; children = (C11000000000000000000007 /* en */, C11000000000000000000008 /* zh-Hans */); name = InfoPlist.strings; sourceTree = "<group>"; };
+/* End PBXVariantGroup section */
 
 /* Begin PBXSourcesBuildPhase section */
 		00000000000000000000003D /* Sources */ = {

@@ -25,7 +25,7 @@ struct OPDSCatalog {
 }
 
 final class OPDSParser: NSObject, XMLParserDelegate {
-    private var catalog = OPDSCatalog(title: "目录", entries: [], links: [])
+    private var catalog = OPDSCatalog(title: String(localized: "Contents"), entries: [], links: [])
     private var entry: OPDSEntry?
     private var stack: [String] = []
     private var texts: [String] = []
@@ -36,7 +36,7 @@ final class OPDSParser: NSObject, XMLParserDelegate {
         let delegate = OPDSParser(base: base)
         let parser = XMLParser(data: data)
         parser.shouldProcessNamespaces = true; parser.shouldResolveExternalEntities = false; parser.delegate = delegate
-        guard parser.parse(), delegate.stack.isEmpty, delegate.sawFeed else { throw AppFailure("不是有效的 OPDS 1.x 目录") }
+        guard parser.parse(), delegate.stack.isEmpty, delegate.sawFeed else { throw AppFailure("Invalid OPDS 1.x catalog.") }
         return delegate.catalog
     }
     private var sawFeed = false
@@ -45,7 +45,7 @@ final class OPDSParser: NSObject, XMLParserDelegate {
         let currentBase = attributes["xml:base"].flatMap { URL(string: $0, relativeTo: parentBase)?.absoluteURL } ?? parentBase
         bases.append(currentBase); stack.append(elementName); texts.append("")
         if elementName == "feed", namespaceURI == "http://www.w3.org/2005/Atom" { sawFeed = true }
-        if elementName == "entry" { entry = OPDSEntry(id: UUID().uuidString, title: "未命名图书", author: "", summary: "", links: []) }
+        if elementName == "entry" { entry = OPDSEntry(id: UUID().uuidString, title: String(localized: "Untitled Book"), author: "", summary: "", links: []) }
         if elementName == "link", let href = attributes["href"], let url = URL(string: href, relativeTo: currentBase)?.absoluteURL {
             let link = OPDSLink(url: url, rel: attributes["rel"] ?? "alternate", type: (attributes["type"] ?? "").components(separatedBy: ";")[0].trimmingCharacters(in: .whitespaces))
             if entry != nil { entry?.links.append(link) } else { catalog.links.append(link) }
@@ -94,15 +94,15 @@ final class OPDSClient {
             let (data, response) = try await http.data(http.request(link.url, credentials: credentials))
             let parser = OpenSearchParser(base: response.url ?? link.url)
             let xml = XMLParser(data: data); xml.shouldProcessNamespaces = true; xml.delegate = parser
-            guard xml.parse(), let found = parser.template else { throw AppFailure("服务器没有支持的搜索模板") }
+            guard xml.parse(), let found = parser.template else { throw AppFailure("The server has no supported search template.") }
             template = found
         }
-        guard template.contains("{searchTerms}") || template.contains("{searchTerms?}") else { throw AppFailure("服务器没有支持的搜索模板") }
+        guard template.contains("{searchTerms}") || template.contains("{searchTerms?}") else { throw AppFailure("The server has no supported search template.") }
         var allowed = CharacterSet.urlQueryAllowed; allowed.remove(charactersIn: "&=+#?/")
         let encoded = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
         template = template.replacingOccurrences(of: "{searchTerms}", with: encoded).replacingOccurrences(of: "{searchTerms?}", with: encoded)
         for (key, value) in [("{startPage?}", "1"), ("{startIndex?}", "0"), ("{count?}", "50"), ("{language?}", ""), ("{inputEncoding?}", "UTF-8"), ("{outputEncoding?}", "UTF-8")] { template = template.replacingOccurrences(of: key, with: value) }
-        guard !template.contains("{"), let url = URL(string: template) else { throw AppFailure("不支持这个搜索模板") }
+        guard !template.contains("{"), let url = URL(string: template) else { throw AppFailure("Unsupported search template.") }
         return url
     }
 }

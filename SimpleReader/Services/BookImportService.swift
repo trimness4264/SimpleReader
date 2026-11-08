@@ -40,7 +40,7 @@ import Combine
             }
             do {
                 let book = try await importer.importBook(from: source)
-                message = "《\(book.title)》已加入书库，可以打开阅读。"
+                message = String(localized: "“\(book.title)” is in your library and ready to read.")
                 // Only remove the system's disposable copy after a successful commit.
                 if source.deletingLastPathComponent().resolvingSymlinksInPath() == inbox.resolvingSymlinksInPath() {
                     completedInbox.insert(source)
@@ -48,7 +48,7 @@ import Combine
                     try? FileManager.default.removeItem(at: source)
                 }
             } catch {
-                self.error = "\(source.lastPathComponent)：导入失败，\(error.localizedDescription)"
+                self.error = String(localized: "Couldn’t import \(source.lastPathComponent): \(error.localizedDescription)")
             }
         }
     }
@@ -75,7 +75,7 @@ import Combine
 
     func importBook(from source: URL, filename: String? = nil) async throws -> Book {
         let name = filename ?? source.lastPathComponent
-        guard let format = BookFormat(rawValue: (name as NSString).pathExtension.lowercased()) else { throw AppFailure("请选择 EPUB 或 PDF 文件") }
+        guard let format = BookFormat(rawValue: (name as NSString).pathExtension.lowercased()) else { throw AppFailure("Choose an EPUB or PDF file.") }
         let access = source.startAccessingSecurityScopedResource()
         defer { if access { source.stopAccessingSecurityScopedResource() } }
         let id = UUID()
@@ -105,7 +105,7 @@ import Combine
         var cover: UIImage?
         switch format {
         case .pdf:
-            guard let pdf = PDFDocument(url: staging), !pdf.isEncrypted, pdf.pageCount > 0 else { throw AppFailure("PDF 损坏、为空或已加密") }
+            guard let pdf = PDFDocument(url: staging), !pdf.isEncrypted, pdf.pageCount > 0 else { throw AppFailure("The PDF is damaged, empty, or encrypted.") }
             title = pdf.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String ?? title
             author = pdf.documentAttributes?[PDFDocumentAttribute.authorAttribute] as? String ?? ""
             cover = pdf.page(at: 0)?.thumbnail(of: CGSize(width: 240, height: 320), for: .mediaBox)

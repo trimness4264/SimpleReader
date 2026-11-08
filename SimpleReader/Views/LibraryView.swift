@@ -43,7 +43,7 @@ struct LibraryView: View {
                 if busy {
                     HStack(spacing: 12) {
                         ProgressView()
-                        Text("正在导入：\(importingFilename ?? "图书")").font(.callout)
+                        Text("Importing \(importingFilename ?? String(localized: "book"))…").font(.callout)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if let message = importMessage {
@@ -51,22 +51,22 @@ struct LibraryView: View {
                         Text(message).font(.callout)
                         HStack {
                             if let book = importedBook {
-                                Button("打开阅读") { selected = book }.disabled(selecting)
+                                Button("Read") { selected = book }.disabled(selecting)
                             }
                             Spacer()
-                            Button("收起") { importMessage = nil; importedBook = nil }
+                            Button("Dismiss") { importMessage = nil; importedBook = nil }
                         }
                     }.padding().background(Color.accentColor.opacity(0.1)).cornerRadius(12)
                 }
                 if !selecting && query.isEmpty && !continuingBooks.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("继续阅读").font(.title2.bold())
+                        Text("Continue Reading").font(.title2.bold())
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 12) {
                                 ForEach(continuingBooks) { book in
                                     Button { selected = book } label: { ContinueReadingCard(book: book, root: store.root) }
                                         .buttonStyle(.plain)
-                                        .accessibilityLabel("继续阅读《\(book.title)》")
+                                        .accessibilityLabel("Continue reading “\(book.title)”")
                                 }
                             }.padding(.vertical, 2)
                         }
@@ -74,22 +74,22 @@ struct LibraryView: View {
                 }
                 if !store.books.isEmpty {
                     HStack {
-                        Text(query.isEmpty ? "全部图书" : "搜索结果").font(.title2.bold())
+                        Text(query.isEmpty ? "All Books" : "Search Results").font(.title2.bold())
                         Text("\(books.count)").foregroundColor(.secondary)
                         Spacer()
                         Menu {
-                            Picker("排序", selection: $sort) {
-                                ForEach(LibrarySort.allCases, id: \.self) { order in Text(order.rawValue).tag(order) }
+                            Picker("Sort", selection: $sort) {
+                                ForEach(LibrarySort.allCases, id: \.self) { order in Text(order.label).tag(order) }
                             }
-                        } label: { Label("排序", systemImage: "arrow.up.arrow.down").font(.callout) }
-                        .accessibilityValue(sort.rawValue)
+                        } label: { Label("Sort", systemImage: "arrow.up.arrow.down").font(.callout) }
+                        .accessibilityValue(Text(sort.label))
                     }
                 }
                 if selecting {
                     HStack {
-                        Text("已选择 \(selectedIDs.count) 本").foregroundColor(.secondary)
+                        Text("\(selectedIDs.count) selected").foregroundColor(.secondary)
                         Spacer()
-                        Button(selectedIDs.count == books.count && !books.isEmpty ? "取消全选" : "全选") {
+                        Button(selectedIDs.count == books.count && !books.isEmpty ? "Deselect All" : "Select All") {
                             selectedIDs = selectedIDs.count == books.count ? [] : Set(books.map(\.id))
                         }.disabled(books.isEmpty)
                     }
@@ -97,11 +97,11 @@ struct LibraryView: View {
                 if books.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "book.closed").font(.system(size: 48)).foregroundColor(.secondary)
-                        Text(store.books.isEmpty ? "书库里还没有图书" : "没有找到图书").font(.title3)
-                        Text(store.books.isEmpty ? "导入 EPUB 或 PDF，也可以从在线书库下载。" : "试试书名、作者或文件名。").foregroundColor(.secondary).multilineTextAlignment(.center)
+                        Text(store.books.isEmpty ? "Your library is empty" : "No books found").font(.title3)
+                        Text(store.books.isEmpty ? "Import an EPUB or PDF, or download a book from an online library." : "Try a title, author, or filename.").foregroundColor(.secondary).multilineTextAlignment(.center)
                         if store.books.isEmpty {
-                            Button("导入图书") { importing = true }.buttonStyle(.borderedProminent).disabled(busy)
-                        } else { Button("清除搜索") { search = "" } }
+                            Button("Import Books") { importing = true }.buttonStyle(.borderedProminent).disabled(busy)
+                        } else { Button("Clear Search") { search = "" } }
                     }.frame(maxWidth: .infinity).padding(.vertical, 70)
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 200), spacing: 20)], alignment: .leading, spacing: 24) {
@@ -111,24 +111,24 @@ struct LibraryView: View {
                 }
             }.padding(20)
         }
-        .navigationTitle("书库")
-        .searchable(text: $search, prompt: "书名、作者或文件名")
+        .navigationTitle("Library")
+        .searchable(text: $search, prompt: "Title, author, or filename")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if selecting {
-                    Button("完成") { finishSelection() }
+                    Button("Done") { finishSelection() }
                 } else {
                     DownloadsToolbarButton(manager: downloads)
-                    Button("选择") { selectedIDs.removeAll(); selecting = true }.disabled(books.isEmpty || busy)
+                    Button("Select") { selectedIDs.removeAll(); selecting = true }.disabled(books.isEmpty || busy)
                     if busy { ProgressView() }
-                    else { Button { importing = true } label: { Image(systemName: "plus") }.accessibilityLabel("导入图书") }
+                    else { Button { importing = true } label: { Image(systemName: "plus") }.accessibilityLabel("Import Books") }
                 }
             }
         }
         .safeAreaInset(edge: .bottom) {
             if selecting {
                 Button(role: .destructive) { deleting = books.filter { selectedIDs.contains($0.id) } } label: {
-                    Label("删除所选（\(selectedIDs.count)）", systemImage: "trash").frame(maxWidth: .infinity)
+                    Label("Delete Selected (\(selectedIDs.count))", systemImage: "trash").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered).disabled(selectedIDs.isEmpty)
                 .padding().background(.regularMaterial)
@@ -147,9 +147,9 @@ struct LibraryView: View {
             }
         }
         .fullScreenCover(item: $selected) { book in ReaderView(bookID: book.id, environment: environment) }
-        .alert("删除 \(deleting.count) 本图书？", isPresented: Binding(get: { !deleting.isEmpty }, set: { if !$0 { deleting = [] } }), presenting: deleting) { booksToDelete in
-            Button("取消", role: .cancel) { deleting = [] }
-            Button("删除", role: .destructive) {
+        .alert("Delete selected books (\(deleting.count))?", isPresented: Binding(get: { !deleting.isEmpty }, set: { if !$0 { deleting = [] } }), presenting: deleting) { booksToDelete in
+            Button("Cancel", role: .cancel) { deleting = [] }
+            Button("Delete", role: .destructive) {
                 // Use the presented value: iOS 15 can clear the binding before this action runs.
                 do {
                     try store.delete(booksToDelete)
@@ -157,7 +157,7 @@ struct LibraryView: View {
                 } catch { self.error = error.localizedDescription }
                 deleting = []
             }
-        } message: { _ in Text("移除本机文件和阅读记录，服务器上的图书会保留。") }
+        } message: { _ in Text("This removes the files and reading history from this device. Books on the server are kept.") }
         .errorAlert($error)
     }
     private func finishSelection() {
@@ -181,10 +181,10 @@ struct LibraryView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(book.title)
-        .accessibilityValue(selecting ? (selectedIDs.contains(book.id) ? "已选择" : "未选择") : "")
-        .accessibilityHint(selecting ? "轻点切换选择状态" : "轻点打开阅读")
+        .accessibilityValue(selecting ? (selectedIDs.contains(book.id) ? "Selected" : "Not selected") : "")
+        .accessibilityHint(selecting ? "Double-tap to toggle selection" : "Double-tap to start reading")
         if selecting { button }
-        else { button.contextMenu { Button(role: .destructive) { deleting = [book] } label: { Label("删除图书", systemImage: "trash") } } }
+        else { button.contextMenu { Button(role: .destructive) { deleting = [book] } label: { Label("Delete Book", systemImage: "trash") } } }
     }
     @MainActor private func importFiles(_ files: [URL]) async {
         guard !busy, !files.isEmpty else { return }
@@ -197,9 +197,9 @@ struct LibraryView: View {
             do {
                 let book = try await environment.importer.importBook(from: file)
                 importedBook = book
-                messages.append(previousIDs.contains(book.id) ? "\(file.lastPathComponent)：已在书库中，无需重复导入。" : "已导入《\(book.title)》。")
+                messages.append(previousIDs.contains(book.id) ? String(localized: "\(file.lastPathComponent) is already in your library.") : String(localized: "Imported “\(book.title)”."))
             } catch {
-                messages.append("\(file.lastPathComponent)：导入失败，\(error.localizedDescription)")
+                messages.append(String(localized: "Couldn’t import \(file.lastPathComponent): \(error.localizedDescription)"))
             }
         }
         importMessage = messages.joined(separator: "\n")
@@ -229,10 +229,16 @@ private struct DocumentImportPicker: UIViewControllerRepresentable {
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { onPicked([]) }
     }
 }
-private enum LibrarySort: String, CaseIterable {
-    case lastRead = "最近阅读"
-    case added = "最近添加"
-    case title = "书名"
+private enum LibrarySort: CaseIterable, Hashable {
+    case lastRead, added, title
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .lastRead: return "Recently Read"
+        case .added: return "Recently Added"
+        case .title: return "Title"
+        }
+    }
 }
 
 private struct ContinueReadingCard: View {
@@ -246,9 +252,9 @@ private struct ContinueReadingCard: View {
                 Text(book.title).font(.headline).lineLimit(2)
                 if !book.author.isEmpty { Text(book.author).font(.caption).foregroundColor(.secondary).lineLimit(1) }
                 ProgressView(value: book.position?.progression ?? 0)
-                Text("读到 \(Int((book.position?.progression ?? 0) * 100))%")
+                Text("\(Int((book.position?.progression ?? 0) * 100))% read")
                     .font(.caption).foregroundColor(.secondary)
-                Label("继续阅读", systemImage: "arrow.right").font(.callout).foregroundColor(.accentColor)
+                Label("Continue Reading", systemImage: "arrow.right").font(.callout).foregroundColor(.accentColor)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(14).frame(width: typeSize.isAccessibilitySize ? 340 : 280)
@@ -282,7 +288,7 @@ private struct BookTile: View {
             Text(book.author.isEmpty ? book.format.rawValue.uppercased() : book.author).font(.caption).foregroundColor(.secondary).lineLimit(1)
             if let position = book.position {
                 ProgressView(value: position.progression)
-                Text("\(Int(position.progression * 100))%" + (book.pendingSync ? " · 待同步" : "")).font(.caption2).foregroundColor(.secondary)
+                Text(book.pendingSync ? String(localized: "\(Int(position.progression * 100))% · Sync pending") : "\(Int(position.progression * 100))%").font(.caption2).foregroundColor(.secondary)
             }
         }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .combine)
     }

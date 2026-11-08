@@ -10,19 +10,19 @@ struct ServersView: View {
     var body: some View {
         List {
             if store.settings.servers.isEmpty {
-                Section { Text("添加 Calibre 的 OPDS 地址，例如 http://192.168.1.10:8080/opds。").foregroundColor(.secondary); Button("添加服务器") { adding = true } }
+                Section { Text("Enter your Calibre OPDS address, for example http://192.168.1.10:8080/opds.").foregroundColor(.secondary); Button("Add Server") { adding = true } }
             }
             ForEach(store.settings.servers) { server in
                 NavigationLink(destination: CatalogView(server: server, url: server.url, environment: environment)) {
                     VStack(alignment: .leading, spacing: 5) { Text(server.name); Text(server.url.absoluteString).font(.caption).foregroundColor(.secondary).lineLimit(1) }
                 }
-                .swipeActions { Button("编辑") { editing = server }.tint(.accentColor); Button(role: .destructive) { delete(server) } label: { Label("删除", systemImage: "trash") } }
+                .swipeActions { Button("Edit") { editing = server }.tint(.accentColor); Button(role: .destructive) { delete(server) } label: { Label("Delete", systemImage: "trash") } }
             }
-        }.navigationTitle("在线书库")
+        }.navigationTitle("Online Library")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true)
-                Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("添加服务器")
+                Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("Add Server")
             }
         }
         .sheet(isPresented: $adding) { ServerEditor(accounts: environment.accounts, server: nil) }
@@ -52,17 +52,17 @@ struct ServerEditor: View {
     var body: some View {
         NavigationView {
             Form {
-                TextField("名称", text: $name)
-                TextField("OPDS 地址", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Section(header: Text("Basic Auth（可选）")) {
-                    TextField("用户名", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    SecureField("密码", text: $password)
+                TextField("Name", text: $name)
+                TextField("OPDS Address", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Section(header: Text("Basic Authentication (Optional)")) {
+                    TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("Password", text: $password)
                 }
-                Text("局域网 HTTP 会明文传输认证信息。公网请使用 HTTPS。").font(.caption).foregroundColor(.secondary)
-            }.navigationTitle(server == nil ? "添加服务器" : "编辑服务器")
+                Text("Local HTTP connections send credentials in plain text. Use HTTPS on public networks.").font(.caption).foregroundColor(.secondary)
+            }.navigationTitle(server == nil ? "Add Server" : "Edit Server")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .navigationBarTrailing) { Button("保存") { save() }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || address.isEmpty) }
+                ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) { Button("Save") { save() }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || address.isEmpty) }
             }
         }.navigationViewStyle(.stack).task { if let server = server { do { password = try accounts.password(for: server) } catch { self.error = error.localizedDescription } } }.errorAlert($error)
     }
@@ -94,7 +94,7 @@ struct ServerEditor: View {
         guard !loading else { return }; loading = true; defer { loading = false }
         do {
             let target = url ?? initialURL
-            if append && visited.contains(target) { throw AppFailure("服务器分页链接重复") }
+            if append && visited.contains(target) { throw AppFailure("The server returned a repeated pagination link.") }
             var loaded = try await client.load(target, credentials: credentials())
             if append, let previous = catalog {
                 let ids = Set(previous.entries.map(\.id)); loaded.entries = previous.entries + loaded.entries.filter { !ids.contains($0.id) }
@@ -119,7 +119,7 @@ struct CatalogView: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.canSearch {
-                HStack { TextField("搜索书库", text: $model.query).submitLabel(.search).onSubmit { Task { await model.search() } }; Button("搜索") { Task { await model.search() } }.disabled(model.loading) }.padding().background(Color(UIColor.secondarySystemBackground))
+                HStack { TextField("Search library", text: $model.query).submitLabel(.search).onSubmit { Task { await model.search() } }; Button("Search") { Task { await model.search() } }.disabled(model.loading) }.padding().background(Color(UIColor.secondarySystemBackground))
             }
             List {
                 ForEach(model.catalog?.entries ?? []) { entry in
@@ -129,10 +129,10 @@ struct CatalogView: View {
                         NavigationLink(destination: EntryView(entry: entry, model: model, environment: environment)) { CatalogRow(entry: entry, model: model, http: environment.http) }
                     }
                 }
-                if let next = model.catalog?.next { Button("加载下一页") { Task { await model.load(url: next, append: true) } }.disabled(model.loading) }
-                if model.loading { ProgressView("正在加载…") }
-                if !model.loading && model.catalog?.entries.isEmpty == true { Text("这个目录没有图书").foregroundColor(.secondary) }
-                if model.catalog == nil && !model.loading { Button("重新加载") { Task { await model.load() } } }
+                if let next = model.catalog?.next { Button("Load Next Page") { Task { await model.load(url: next, append: true) } }.disabled(model.loading) }
+                if model.loading { ProgressView("Loading…") }
+                if !model.loading && model.catalog?.entries.isEmpty == true { Text("This catalog has no books").foregroundColor(.secondary) }
+                if model.catalog == nil && !model.loading { Button("Reload") { Task { await model.load() } } }
             }
         }.navigationTitle(model.catalog?.title ?? model.server.name).navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true) } }
@@ -168,13 +168,13 @@ struct EntryView: View {
     var body: some View {
         List {
             Section { Text(entry.title).font(.title2); if !entry.author.isEmpty { Text(entry.author).foregroundColor(.secondary) }; if !entry.summary.isEmpty { Text(entry.summary) } }
-            Section(header: Text("下载到本机")) {
+            Section(header: Text("Download to This Device")) {
                 ForEach(downloadLinks, id: \.self) { link in
                     EntryDownloadView(title: entry.title, link: link, model: model, environment: environment)
                 }
-                if entry.downloads.isEmpty { Text("没有可下载的 EPUB/PDF；DRM 图书暂不支持。").foregroundColor(.secondary) }
+                if entry.downloads.isEmpty { Text("No EPUB or PDF downloads available. DRM-protected books are unsupported.").foregroundColor(.secondary) }
             }
-        }.navigationTitle("图书详情").navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle("Book Details").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true) } }
     }
 }
@@ -203,28 +203,28 @@ private struct EntryDownloadView: View {
                 switch job.state {
                 case .queued, .downloading:
                     HStack {
-                        Text(job.state == .queued ? "\(format) 等待下载" : "\(format) 正在下载")
+                        Text(job.state == .queued ? "\(format) queued" : "Downloading \(format)")
                         Spacer()
                         if job.state == .downloading {
                             Text("\(Int(job.progress * 100))%").monospacedDigit().foregroundColor(.secondary)
                         }
                     }
-                    if job.state == .downloading { ProgressView(value: job.progress).accessibilityLabel("\(format) 下载进度") }
-                    Button("取消下载", role: .destructive) { manager.cancel(job.id) }
+                    if job.state == .downloading { ProgressView(value: job.progress).accessibilityLabel("\(format) download progress") }
+                    Button("Cancel Download", role: .destructive) { manager.cancel(job.id) }
                 case .importing:
-                    ProgressView("\(format) 正在加入书库…")
+                    ProgressView("Adding \(format) to library…")
                 case .finished:
                     if let id = job.bookID, let book = store.book(id) {
-                        Label("\(format) 已加入书库", systemImage: "checkmark.circle").foregroundColor(.secondary)
-                        Button { reading = book } label: { Label("打开 \(format) 阅读", systemImage: "book") }
+                        Label("\(format) added to library", systemImage: "checkmark.circle").foregroundColor(.secondary)
+                        Button { reading = book } label: { Label("Read \(format)", systemImage: "book") }
                     } else {
-                        Text("\(format) 已从书库移除").foregroundColor(.secondary)
+                        Text("\(format) removed from library").foregroundColor(.secondary)
                         downloadButton
                     }
                 case .failed, .cancelled:
-                    Text(job.state == .failed ? "\(format) 下载失败" : "\(format) 已取消").foregroundColor(.secondary)
+                    Text(job.state == .failed ? "\(format) download failed" : "\(format) download canceled").foregroundColor(.secondary)
                     if let message = job.error { Text(message).font(.caption).foregroundColor(.red) }
-                    Button { manager.retry(job.id) } label: { Label("重新下载 \(format)", systemImage: "arrow.clockwise") }
+                    Button { manager.retry(job.id) } label: { Label("Download \(format) Again", systemImage: "arrow.clockwise") }
                 }
             } else { downloadButton }
         }
@@ -238,6 +238,6 @@ private struct EntryDownloadView: View {
         Button {
             do { manager.enqueue(title: title, link: link, credentials: try model.credentials()) }
             catch { self.error = error.localizedDescription }
-        } label: { Label("下载 \(format)", systemImage: "arrow.down.circle") }
+        } label: { Label("Download \(format)", systemImage: "arrow.down.circle") }
     }
 }

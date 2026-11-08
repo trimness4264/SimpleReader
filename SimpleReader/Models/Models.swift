@@ -97,5 +97,5 @@ struct AppSettings: Codable {
 struct AppFailure: LocalizedError {
     let message: String
     var errorDescription: String? { message }
-    init(_ message: String) { self.message = message }
+    init(_ message: String.LocalizationValue) { self.message = String(localized: message) }
 }

@@ -349,7 +349,7 @@ private final class ReaderContainerView: UIView {
             if children.first.map({ hasVisibleEPUBContent(in: $0.view) }) == true { return }
             try await Task.sleep(nanoseconds: 16_000_000)
         }
-        throw NSError(domain: "Reader", code: 1, userInfo: [NSLocalizedDescriptionKey: "章节内容尚未显示，请重试。"])
+        throw NSError(domain: "Reader", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "Chapter content isn’t visible yet. Try again.")])
     }
 
     private func hasVisibleEPUBContent(in content: UIView) -> Bool {

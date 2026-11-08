@@ -71,7 +71,7 @@ import XCTest
             _ = try await sync.synchronize(book.id)
             XCTFail("A response for the old account must not be uploaded")
         } catch {
-            XCTAssertEqual(error.localizedDescription, "同步设置已改变，请重试")
+            XCTAssertEqual(error.localizedDescription, String(localized: "Sync settings changed. Try again."))
         }
 
         XCTAssertNil(server.remote)

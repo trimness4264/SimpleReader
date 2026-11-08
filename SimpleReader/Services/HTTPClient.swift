@@ -15,9 +15,9 @@ enum NetworkPolicy {
             && firstPort == secondPort
     }
     static func validate(_ url: URL) throws {
-        guard let host = url.host?.lowercased(), url.user == nil, url.password == nil else { throw AppFailure("请输入不含密码的完整服务器地址") }
+        guard let host = url.host?.lowercased(), url.user == nil, url.password == nil else { throw AppFailure("Enter a full server address without a password.") }
         if url.scheme?.lowercased() == "https" { return }
-        guard url.scheme?.lowercased() == "http", isLocal(host) else { throw AppFailure("公网服务器必须使用 HTTPS；HTTP 仅用于局域网") }
+        guard url.scheme?.lowercased() == "http", isLocal(host) else { throw AppFailure("Public servers require HTTPS. HTTP is available only on local networks.") }
     }
     static func isLocal(_ host: String) -> Bool {
         if host == "localhost" || host.hasSuffix(".local") || !host.contains(".") && !host.contains(":") { return true }
@@ -74,20 +74,20 @@ final class HTTPClient {
         return request
     }
     private static func check(_ response: URLResponse) throws -> HTTPURLResponse {
-        guard let response = response as? HTTPURLResponse else { throw AppFailure("服务器响应无效") }
+        guard let response = response as? HTTPURLResponse else { throw AppFailure("Invalid server response.") }
         guard (200...299).contains(response.statusCode) else {
-            throw AppFailure(response.statusCode == 401 || response.statusCode == 403 ? "认证失败，请检查账号与密码" : "服务器返回 HTTP \(response.statusCode)")
+            throw AppFailure(response.statusCode == 401 || response.statusCode == 403 ? "Authentication failed. Check your username and password." : "The server returned HTTP \(response.statusCode).")
         }
         return response
     }
     func data(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        guard let url = request.url else { throw AppFailure("地址无效") }
+        guard let url = request.url else { throw AppFailure("Invalid address.") }
         try NetworkPolicy.validate(url)
         let (data, response) = try await session.data(for: request, delegate: CredentialGuard(origin: url))
         return (data, try Self.check(response))
     }
     func download(_ request: URLRequest, progress: @escaping (Double) -> Void) async throws -> (URL, HTTPURLResponse) {
-        guard let url = request.url else { throw AppFailure("地址无效") }
+        guard let url = request.url else { throw AppFailure("Invalid address.") }
         try NetworkPolicy.validate(url)
         let (file, response) = try await session.download(for: request, delegate: TransferDelegate(origin: url, progress: progress))
         do { return (file, try Self.check(response)) }

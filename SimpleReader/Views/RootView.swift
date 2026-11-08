@@ -26,14 +26,14 @@ struct RootView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 if sharedImports.pendingCount > 0 {
-                    HStack { ProgressView(); Text("正在导入分享的图书…") }
+                    HStack { ProgressView(); Text("Importing shared book…") }
                         .padding().frame(maxWidth: .infinity).background(.regularMaterial)
                 }
             }
-            .alert(sharedImports.error == nil ? "图书已导入" : "操作未完成", isPresented: Binding(get: {
+            .alert(sharedImports.error == nil ? "Book Imported" : "Couldn’t Complete Action", isPresented: Binding(get: {
                 sharedImports.pendingCount == 0 && (sharedImports.message != nil || sharedImports.error != nil)
             }, set: { if !$0 { sharedImports.message = nil; sharedImports.error = nil } })) {
-                Button("好", role: .cancel) { sharedImports.message = nil; sharedImports.error = nil }
+                Button("OK", role: .cancel) { sharedImports.message = nil; sharedImports.error = nil }
             } message: { Text(sharedImports.error ?? sharedImports.message ?? "") }
     }
     @ViewBuilder private var content: some View {
@@ -56,20 +56,20 @@ struct RootView: View {
             }
         } else {
             TabView(selection: $selectedTab) {
-                NavigationView { LibraryView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("书库", systemImage: "books.vertical") }.tag(0)
-                NavigationView { ServersView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("在线书库", systemImage: "network") }.tag(1)
-                NavigationView { SettingsView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("设置", systemImage: "gearshape") }.tag(2)
+                NavigationView { LibraryView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("Library", systemImage: "books.vertical") }.tag(0)
+                NavigationView { ServersView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("Online Library", systemImage: "network") }.tag(1)
+                NavigationView { SettingsView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
             }
         }
     }
     private var sidebar: some View {
         List {
-            sidebarButton("书库", systemImage: "books.vertical", tab: 0)
-            sidebarButton("在线书库", systemImage: "network", tab: 1)
-            sidebarButton("设置", systemImage: "gearshape", tab: 2)
+            sidebarButton("Library", systemImage: "books.vertical", tab: 0)
+            sidebarButton("Online Library", systemImage: "network", tab: 1)
+            sidebarButton("Settings", systemImage: "gearshape", tab: 2)
         }.listStyle(.sidebar).navigationTitle("Simple Reader")
     }
-    private func sidebarButton(_ title: String, systemImage: String, tab: Int) -> some View {
+    private func sidebarButton(_ title: LocalizedStringKey, systemImage: String, tab: Int) -> some View {
         Button { selectedTab = tab } label: {
             Label(title, systemImage: systemImage).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -88,8 +88,8 @@ struct RootView: View {
 struct ErrorAlert: ViewModifier {
     @Binding var error: String?
     func body(content: Content) -> some View {
-        content.alert("操作未完成", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("好", role: .cancel) { error = nil }
+        content.alert("Couldn’t Complete Action", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
     }
 }

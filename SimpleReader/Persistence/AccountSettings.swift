@@ -35,7 +35,7 @@ struct CredentialStorage {
     }
 
     func saveServer(_ server: OPDSServer?, name: String, address: String, username: String, password: String) throws {
-        let url = try validatedURL(address, message: "服务器地址无效")
+        let url = try validatedURL(address, message: "Invalid server address.")
         let record = OPDSServer(id: server?.id ?? UUID(), name: name, url: url, username: username)
         var settings = store.settings
         if let index = settings.servers.firstIndex(where: { $0.id == record.id }) {
@@ -77,21 +77,21 @@ struct CredentialStorage {
 
     func syncClient() throws -> KOReaderSyncClient {
         let config = store.settings.sync
-        guard !config.username.isEmpty else { throw AppFailure("请设置 KOReader Sync 账号") }
+        guard !config.username.isEmpty else { throw AppFailure("Set up a KOReader Sync account.") }
         return KOReaderSyncClient(settings: config, password: try syncPassword(), http: http)
     }
 
     private func serverKey(_ id: UUID) -> String { "opds-\(id)" }
 
-    private func validatedURL(_ address: String, message: String) throws -> URL {
+    private func validatedURL(_ address: String, message: String.LocalizationValue) throws -> URL {
         guard let url = URL(string: address.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw AppFailure(message) }
         try NetworkPolicy.validate(url)
         return url
     }
 
     private func syncConfiguration(address: String, username: String, password: String, enabled: Bool, filenameMatching: Bool) throws -> SyncSettings {
-        let url = try validatedURL(address, message: "同步服务器地址无效")
-        if enabled && (username.isEmpty || password.isEmpty) { throw AppFailure("启用同步前请填写账号和密码") }
+        let url = try validatedURL(address, message: "Invalid sync server address.")
+        if enabled && (username.isEmpty || password.isEmpty) { throw AppFailure("Enter your username and password before enabling sync.") }
         var config = store.settings.sync
         config.url = url
         config.username = username
@@ -110,7 +110,7 @@ struct CredentialStorage {
             do {
                 try writeCredential(previous, key: key)
             } catch {
-                throw AppFailure("配置保存失败：\(saveError.localizedDescription)。原有安全凭据恢复失败：\(error.localizedDescription)")
+                throw AppFailure("Couldn’t save settings: \(saveError.localizedDescription). Couldn’t restore the previous credentials: \(error.localizedDescription)")
             }
             throw saveError
         }
