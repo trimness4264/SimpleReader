@@ -329,7 +329,7 @@ extension EPUBReadingNavigator {
             }
             try await Task.sleep(nanoseconds: 16_000_000)
         }
-        throw AppFailure("章节加载超时，请重试")
+        throw AppFailure("The chapter took too long to load. Try again.")
     }
 
     func evaluateJavaScript(_ script: String) async -> Result<Any, Error> {

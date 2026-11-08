@@ -38,9 +38,9 @@ import SwiftUI
             else {
                 VStack(spacing: 16) {
                     Image(systemName: "externaldrive.badge.exclamationmark").font(.largeTitle)
-                    Text("书库暂时无法打开").font(.title2)
-                    Text(bootstrap.error ?? "未知错误").font(.callout)
-                    Text("请重新启动应用。现有数据会保留。").foregroundColor(.secondary)
+                    Text("Library Temporarily Unavailable").font(.title2)
+                    Text(bootstrap.error ?? String(localized: "Unknown error")).font(.callout)
+                    Text("Restart the app. Your existing data will be kept.").foregroundColor(.secondary)
                 }.padding()
             }
         }

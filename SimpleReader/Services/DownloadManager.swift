@@ -64,7 +64,7 @@ struct DownloadJob: Identifiable {
                     defer { try? FileManager.default.removeItem(at: file) }
                     try Task.checkCancellation()
                     let contentType = response.mimeType ?? ""
-                    guard !contentType.contains("text/html"), !contentType.contains("application/json") else { throw AppFailure("下载返回了登录页或错误页") }
+                    guard !contentType.contains("text/html"), !contentType.contains("application/json") else { throw AppFailure("The download returned a sign-in or error page.") }
                     let ext = job.link.type == "application/pdf" ? "pdf" : "epub"
                     var name = (response.suggestedFilename ?? job.link.url.lastPathComponent) as NSString
                     if name.pathExtension.lowercased() != ext { name = "\(name.deletingPathExtension).\(ext)" as NSString }

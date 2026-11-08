@@ -28,7 +28,9 @@ struct SyncPrompt: Identifiable {
     @Published private(set) var recoveryError: String?
     @Published var error: String?
     @Published var bridgeWarning: String?
-    @Published private(set) var syncMessage: String?
+    @Published private var syncNotice: String?
+    @Published private(set) var syncError: String?
+    var syncMessage: String? { syncError ?? syncNotice }
     @Published var progression: Double = 0
     @Published var contents: [ContentsItem] = []
     @Published private(set) var currentContentsID: UUID?
@@ -107,7 +109,7 @@ struct SyncPrompt: Identifiable {
         guard let epub = epub, (navigator as AnyObject) === epub, epub.currentSelection == nil else { return }
         contentTapped(at: point, in: epub.view.bounds)
     }
-    var title: String { store.book(bookID)?.title ?? "阅读" }
+    var title: String { store.book(bookID)?.title ?? String(localized: "Reading") }
     var isScrolling: Bool { supportsScrolling && store.settings.reader.layout == .scroll }
     var pdfPageCount: Int? { pdf?.document?.pageCount }
     var currentPDFPage: Int? {
@@ -116,7 +118,7 @@ struct SyncPrompt: Identifiable {
     }
     var progressLabel: String {
         if let document = pdf?.document, let page = pdf?.currentPage {
-            return "第 \(document.index(for: page) + 1) / \(document.pageCount) 页"
+            return String(localized: "Page \(document.index(for: page) + 1) of \(document.pageCount)")
         }
         return "\(Int(min(max(progression, 0), 1) * 100))%"
     }
@@ -135,7 +137,7 @@ struct SyncPrompt: Identifiable {
     func load() async {
         guard !loading else { return }; loading = true
         do {
-            guard var book = store.book(bookID) else { throw AppFailure("图书已删除") }
+            guard var book = store.book(bookID) else { throw AppFailure("The book has been deleted.") }
             book.lastOpenedAt = Date(); try store.save(book)
             suppressChanges = true
             switch book.format {
@@ -143,16 +145,16 @@ struct SyncPrompt: Identifiable {
                 let publication = try await readium.open(store.fileURL(book.filePath))
                 let spine: [String]
                 do { spine = try await readium.spine(store.fileURL(book.filePath)) }
-                catch { spine = []; bridgeWarning = "无法读取原始章节顺序，EPUB 同步暂停。" }
+                catch { spine = []; bridgeWarning = String(localized: "Couldn’t read the original chapter order. EPUB sync is paused.") }
                 epubPosition = await EPUBReadingPosition(publication: publication, spine: spine)
                 let locator = try book.position?.locatorJSON.flatMap { try Locator(jsonString: $0) }
                 try installNavigator(publication: publication, locator: locator)
                 func flatten(_ links: [ReadiumShared.Link], depth: Int = 0) -> [ContentsItem] {
-                    links.flatMap { [ContentsItem(title: String(repeating: "  ", count: depth) + ($0.title ?? "章节"), link: $0, pdfPage: nil)] + flatten($0.children, depth: depth+1) }
+                    links.flatMap { [ContentsItem(title: String(repeating: "  ", count: depth) + ($0.title ?? String(localized: "Chapter")), link: $0, pdfPage: nil)] + flatten($0.children, depth: depth+1) }
                 }
                 contents = flatten(try await publication.tableOfContents().get())
             case .pdf:
-                guard let document = PDFDocument(url: store.fileURL(book.filePath)), document.pageCount > 0 else { throw AppFailure("无法打开 PDF") }
+                guard let document = PDFDocument(url: store.fileURL(book.filePath)), document.pageCount > 0 else { throw AppFailure("Couldn’t open the PDF.") }
                 let view = PDFView(frame: container.view.bounds); view.document = document; view.autoScales = true
                 view.displayMode = displaysTwoPages ? .twoUpContinuous : .singlePageContinuous
                 view.displaysAsBook = false
@@ -167,12 +169,12 @@ struct SyncPrompt: Identifiable {
                         (0..<item.numberOfChildren).flatMap { index -> [ContentsItem] in
                             guard let child = item.child(at: index) else { return [] }
                             let page = child.destination?.page.map { document.index(for: $0) }
-                            return [ContentsItem(title: String(repeating: "  ", count: depth) + (child.label ?? "章节"), link: nil, pdfPage: page)] + flatten(child, depth: depth+1)
+                            return [ContentsItem(title: String(repeating: "  ", count: depth) + (child.label ?? String(localized: "Chapter")), link: nil, pdfPage: page)] + flatten(child, depth: depth+1)
                         }
                     }
                     contents = flatten(outline)
                 }
-                if contents.isEmpty { contents = (0..<document.pageCount).map { ContentsItem(title: "第 \($0+1) 页", link: nil, pdfPage: $0) } }
+                if contents.isEmpty { contents = (0..<document.pageCount).map { ContentsItem(title: String(localized: "Page \($0+1)"), link: nil, pdfPage: $0) } }
                 pageObserver = NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.pdfChanged() }
                 }
@@ -199,7 +201,7 @@ struct SyncPrompt: Identifiable {
                 try await Task.sleep(nanoseconds: 100_000_000)
             }
             guard !closed, view.window != nil, !view.bounds.isEmpty else {
-                throw AppFailure("PDF 布局未就绪，请重新打开")
+                throw AppFailure("The PDF layout isn’t ready. Reopen the book.")
             }
             container.view.layoutIfNeeded()
             view.layoutIfNeeded()
@@ -207,7 +209,7 @@ struct SyncPrompt: Identifiable {
                let target = document.page(at: min(max(index, 0), document.pageCount - 1)) {
                 view.go(to: target)
             }
-            guard let page = view.currentPage else { throw AppFailure("无法恢复 PDF 阅读位置") }
+            guard let page = view.currentPage else { throw AppFailure("Couldn’t restore the PDF reading position.") }
             let index = document.index(for: page)
             position = ReadingPosition(progression: Double(index+1)/Double(document.pageCount), pdfPage: index, updatedAt: current?.updatedAt ?? Date())
         }
@@ -343,7 +345,7 @@ struct SyncPrompt: Identifiable {
                 try installNavigator(publication: navigator.publication, locator: checkpoint.locator)
             }
             guard let navigator = activeEPUB, let epubPosition = epubPosition, let location = checkpoint.locator else {
-                throw AppFailure("无法读取上次阅读位置")
+                throw AppFailure("Couldn’t read the last reading position.")
             }
             try await epubPosition.restore(location, pointer: checkpoint.position?.xpointer, in: navigator) {
                 revision == self.restorationRevision && self.isActive && !self.closed
@@ -361,7 +363,7 @@ struct SyncPrompt: Identifiable {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                bridgeWarning = "无法转换当前位置，已保留本地进度；同步上传暂停。"
+                bridgeWarning = String(localized: "Couldn’t convert the current position. Local progress was saved and sync uploads are paused.")
             }
             guard revision == restorationRevision, isActive, !closed else { throw CancellationError() }
             if position.xpointer != nil, var book = store.book(bookID) {
@@ -440,7 +442,7 @@ struct SyncPrompt: Identifiable {
         guard let navigator = activeEPUB, let epubPosition = epubPosition else { return }
         let pointer: String?
         do { pointer = try await epubPosition.capture(locator, in: navigator); bridgeWarning = nil }
-        catch { pointer = nil; bridgeWarning = "无法转换当前位置，已保留本地进度；同步上传暂停。" }
+        catch { pointer = nil; bridgeWarning = String(localized: "Couldn’t convert the current position. Local progress was saved and sync uploads are paused.") }
         guard generation == captureGeneration, !suppressChanges, !isRestoring, !closed, !container.isTurningPage else { return }
         let position = ReadingPosition(progression: locator.locations.totalProgression ?? progression, locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: Date())
         saveChanged(position)
@@ -572,7 +574,7 @@ struct SyncPrompt: Identifiable {
     }
     func jump(toPage page: Int) async {
         guard let count = pdfPageCount, (1...count).contains(page) else {
-            error = "页码不在本书范围内"
+            error = String(localized: "Page number outside this book’s range.")
             return
         }
         guard page != currentPDFPage else { return }
@@ -599,17 +601,17 @@ struct SyncPrompt: Identifiable {
             case .checkpoint(let saved):
                 try await epubPosition.restore(saved.locator, pointer: saved.position?.xpointer, in: navigator, isCurrent: isCurrent)
             case .page:
-                throw AppFailure("无法跳转到指定位置")
+                throw AppFailure("Couldn’t jump to the selected position.")
             }
         } else if let pdf = pdf {
             switch target {
             case .page(let index):
-                guard let page = pdf.document?.page(at: index) else { throw AppFailure("页码不在本书范围内") }
+                guard let page = pdf.document?.page(at: index) else { throw AppFailure("Page number outside this book’s range.") }
                 pdf.go(to: page)
             case .checkpoint(let saved):
-                guard let destination = saved.destination else { throw AppFailure("无法返回原位置") }
+                guard let destination = saved.destination else { throw AppFailure("Couldn’t return to the previous position.") }
                 pdf.go(to: destination)
-            default: throw AppFailure("无法跳转到指定位置")
+            default: throw AppFailure("Couldn’t jump to the selected position.")
             }
         }
     }
@@ -655,7 +657,7 @@ struct SyncPrompt: Identifiable {
                     locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: Date()))
                 if let error = persistenceError { throw error }
                 latestLocator = locator; capturedLocator = locator
-                bridgeWarning = pointer == nil ? "无法转换当前位置，已保留本地进度；同步上传暂停。" : nil
+                bridgeWarning = pointer == nil ? String(localized: "Couldn’t convert the current position. Local progress was saved and sync uploads are paused.") : nil
             } else if let page = currentPDFPage, let count = pdfPageCount {
                 saveChanged(ReadingPosition(progression: Double(page) / Double(count), pdfPage: page - 1, updatedAt: Date()))
                 if let error = persistenceError { throw error }
@@ -681,7 +683,7 @@ struct SyncPrompt: Identifiable {
                 } catch {
                     checkpoint = origin
                     isRestoring = true
-                    recoveryError = "无法恢复跳转前的位置，请重试"
+                    recoveryError = String(localized: "Couldn’t restore the position before the jump. Try again.")
                     scheduleRestoration()
                     return
                 }
@@ -695,7 +697,8 @@ struct SyncPrompt: Identifiable {
         guard ready, !busySync, !suppressChanges, !isNavigating, (!isRestoring || !applyRemote), !container.isTurningPage, prompt == nil else { return }
         busySync = true; defer { busySync = false }
         let revision = navigationRevision
-        syncMessage = nil
+        syncNotice = nil
+        syncError = nil
         do {
             // Save the latest page before the coordinator takes a snapshot.
             if flushFirst { await flush() }
@@ -707,23 +710,24 @@ struct SyncPrompt: Identifiable {
                 // A network response must not override a turn made while awaiting it,
                 // even if the 400 ms position capture has not reached the store yet.
                 guard applyRemote, !closed, !Task.isCancelled, revision == navigationRevision else {
-                    syncMessage = "已保留当前阅读位置，请稍后同步"
+                    syncNotice = String(localized: "Your current reading position was kept. Sync again later.")
                     return
                 }
                 if case .conflict = outcome {
                     prompt = SyncPrompt(kind: .conflict, remote: remote)
                 } else if !userInitiated && remote.fingerprint == offeredApproximateFingerprint {
-                    syncMessage = "远端位置无法精确解析，已保留本地进度"
+                    syncNotice = String(localized: "Couldn’t resolve the exact remote position. Local progress was kept.")
                 } else {
                     await receive(remote)
                 }
             }
-        } catch { syncMessage = "同步失败：\(error.localizedDescription)" }
+        } catch { syncError = String(localized: "Sync failed: \(error.localizedDescription)") }
     }
     func receive(_ remote: RemoteProgress, approximate: Bool = false) async {
         guard ready, !closed, !suppressChanges, !isRestoring, !isNavigating else { return }
         let revision = restorationRevision
-        syncMessage = nil
+        syncNotice = nil
+        syncError = nil
         suppressChanges = true; saving?.cancel(); captureGeneration += 1
         defer { suppressChanges = false }
         let previous = current
@@ -736,16 +740,16 @@ struct SyncPrompt: Identifiable {
                 let locator: Locator
                 let isCurrent = { revision == self.restorationRevision && !self.closed && !self.isRestoring }
                 if approximate {
-                    guard let percentage = remote.percentage else { throw AppFailure("无法按百分比定位") }
+                    guard let percentage = remote.percentage else { throw AppFailure("Couldn’t locate the position by percentage.") }
                     locator = try await epubPosition.go(toProgression: percentage, in: navigator, isCurrent: isCurrent)
                 } else {
-                    guard let pointer = remote.progress else { throw AppFailure("远端没有正文位置") }
+                    guard let pointer = remote.progress else { throw AppFailure("No remote reading position is available.") }
                     locator = try await epubPosition.go(toPointer: pointer, in: navigator, isCurrent: isCurrent)
                 }
                 guard isCurrent() else { return }
                 position = ReadingPosition(progression: remote.percentage ?? 0, locatorJSON: locator.jsonString, xpointer: approximate ? nil : remote.progress, updatedAt: Date())
             } else {
-                guard let raw = remote.progress, let page = Int(raw), page > 0, let document = pdf?.document, let target = document.page(at: page-1) else { throw AppFailure("远端 PDF 页码不在本书范围内") }
+                guard let raw = remote.progress, let page = Int(raw), page > 0, let document = pdf?.document, let target = document.page(at: page-1) else { throw AppFailure("The remote PDF page number is outside this book’s range.") }
                 pdf?.go(to: target)
                 position = ReadingPosition(progression: Double(page)/Double(document.pageCount), pdfPage: page-1, updatedAt: Date())
             }
@@ -763,7 +767,7 @@ struct SyncPrompt: Identifiable {
                     revision == self.restorationRevision && !self.closed && !self.isRestoring
                 }
             }
-            syncMessage = "同步失败：\(error.localizedDescription)"
+            syncError = String(localized: "Sync failed: \(error.localizedDescription)")
             if activeEPUB != nil && !approximate {
                 offeredApproximateFingerprint = remote.fingerprint
                 prompt = SyncPrompt(kind: .approximate, remote: remote)
@@ -795,7 +799,7 @@ private enum ReaderFonts {
         func face(_ name: String, style: CSSFontStyle = .normal, weight: CSSStandardFontWeight = .normal) throws -> CSSFontFace {
             guard let url = Bundle.main.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts"),
                   let file = FileURL(url: url) else {
-                throw AppFailure("阅读字体缺失：\(name)")
+                throw AppFailure("Missing reading font: \(name)")
             }
             return CSSFontFace(file: file, style: style, weight: .standard(weight))
         }

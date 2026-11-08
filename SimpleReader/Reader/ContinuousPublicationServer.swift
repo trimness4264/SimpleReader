@@ -24,11 +24,11 @@ import ReadiumShared
                 let mime: String
                 if path.hasPrefix("_reader/fonts/") {
                     let name = URL(fileURLWithPath: path).lastPathComponent
-                    guard let file = Bundle.main.url(forResource: String(name.dropLast(4)), withExtension: "ttf", subdirectory: "Fonts") else { throw AppFailure("阅读字体缺失") }
+                    guard let file = Bundle.main.url(forResource: String(name.dropLast(4)), withExtension: "ttf", subdirectory: "Fonts") else { throw AppFailure("A reading font is missing.") }
                     data = try Data(contentsOf: file)
                     mime = "font/ttf"
                 } else {
-                    guard let href = AnyURL(string: path), let resource = self.publication.get(href) else { throw AppFailure("图书资源不存在：\(path)") }
+                    guard let href = AnyURL(string: path), let resource = self.publication.get(href) else { throw AppFailure("Book resource not found: \(path)") }
                     data = try await resource.read().get()
                     let properties = try? await resource.properties().get()
                     mime = self.publication.linkWithHREF(href)?.mediaType?.string ?? properties?.mediaType?.string ?? "application/octet-stream"

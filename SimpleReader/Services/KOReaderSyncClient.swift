@@ -25,15 +25,15 @@ final class KOReaderSyncClient: ProgressSyncClient {
         let (data, _) = try await http.data(request(path: "syncs/progress/\(document)"))
         let progress = try JSONDecoder().decode(RemoteProgress.self, from: data)
         guard let percentage = progress.percentage else { return nil }
-        guard percentage.isFinite, (0...1).contains(percentage), let pointer = progress.progress, !pointer.isEmpty else { throw AppFailure("服务器阅读位置无效") }
+        guard percentage.isFinite, (0...1).contains(percentage), let pointer = progress.progress, !pointer.isEmpty else { throw AppFailure("The server returned an invalid reading position.") }
         return progress
     }
     func put(document: String, position: ReadingPosition, deviceID: String) async throws {
         let pointer: String
         if let page = position.pdfPage { pointer = String(page + 1) }
         else if let xpointer = position.xpointer, xpointer.hasPrefix("/body/DocFragment") { pointer = xpointer }
-        else { throw AppFailure("EPUB 位置转换失败，已保留本地进度并暂停上传") }
-        guard position.progression.isFinite, (0...1).contains(position.progression) else { throw AppFailure("本地阅读进度无效") }
+        else { throw AppFailure("Couldn’t convert the EPUB position. Your local progress was saved and uploads are paused.") }
+        guard position.progression.isFinite, (0...1).contains(position.progression) else { throw AppFailure("Invalid local reading progress.") }
         var request = try request(path: "syncs/progress", method: "PUT")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["document": document, "progress": pointer, "percentage": position.progression, "device": "Simple Reader", "device_id": deviceID])
@@ -56,7 +56,7 @@ enum SyncDecision: Equatable {
 }
 @MainActor final class SyncCoordinator: ObservableObject {
     enum Outcome { case idle, remote(RemoteProgress), conflict(RemoteProgress) }
-    @Published private(set) var status = "尚未同步"
+    @Published private(set) var status = String(localized: "Not synced yet")
     private let store: LibraryStore
     private let accounts: AccountSettings
     private var active: Set<UUID> = []
@@ -76,14 +76,14 @@ enum SyncDecision: Equatable {
             let configuration = store.settings.sync
             let identity = document(initial)
             let remote = try await client.get(document: identity)
-            guard store.settings.sync.url == configuration.url, store.settings.sync.username == configuration.username, store.settings.sync.filenameMatching == configuration.filenameMatching, store.settings.sync.enabled else { throw AppFailure("同步设置已改变，请重试") }
+            guard store.settings.sync.url == configuration.url, store.settings.sync.username == configuration.username, store.settings.sync.filenameMatching == configuration.filenameMatching, store.settings.sync.enabled else { throw AppFailure("Sync settings changed. Try again.") }
             guard let book = store.book(id) else { return .idle }
             let decision = SyncDecision.decide(book: book, remote: remote)
             if !preferLocal {
                 switch decision {
-                case .pull(let value): status = "发现远端进度"; return .remote(value)
-                case .conflict(let value): status = "需要选择同步位置"; return .conflict(value)
-                case .unchanged: status = "进度一致"; return .idle
+                case .pull(let value): status = String(localized: "Remote progress found"); return .remote(value)
+                case .conflict(let value): status = String(localized: "Choose a reading position to sync"); return .conflict(value)
+                case .unchanged: status = String(localized: "Reading positions match"); return .idle
                 case .push: break
                 }
             }
@@ -92,19 +92,19 @@ enum SyncDecision: Equatable {
             let confirmed = try await client.get(document: identity)
             let expected = snapshot.pdfPage.map { String($0+1) } ?? snapshot.xpointer
             guard let confirmed = confirmed, confirmed.progress == expected else {
-                status = "远端位置已变化，本地仍待同步"; return .idle
+                status = String(localized: "The remote position changed. Local progress is still waiting to sync."); return .idle
             }
-            guard store.settings.sync.url == configuration.url, store.settings.sync.username == configuration.username, store.settings.sync.filenameMatching == configuration.filenameMatching else { throw AppFailure("同步设置已改变，请重试") }
+            guard store.settings.sync.url == configuration.url, store.settings.sync.username == configuration.username, store.settings.sync.filenameMatching == configuration.filenameMatching else { throw AppFailure("Sync settings changed. Try again.") }
             guard var latest = store.book(id) else { return .idle }
             latest.remoteBaseline = confirmed.fingerprint
             if latest.position == snapshot { latest.pendingSync = false }
             try store.save(latest)
-            status = "同步完成"; return .idle
+            status = String(localized: "Sync complete"); return .idle
         } catch { status = error.localizedDescription; throw error }
     }
     func acceptRemote(_ remote: RemoteProgress, id: UUID, position: ReadingPosition) throws {
         guard var book = store.book(id) else { return }
         book.position = position; book.pendingSync = false; book.remoteBaseline = remote.fingerprint
-        try store.save(book); status = "已接收远端进度"
+        try store.save(book); status = String(localized: "Received remote progress")
     }
 }

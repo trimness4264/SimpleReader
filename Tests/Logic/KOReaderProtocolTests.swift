@@ -34,7 +34,7 @@ final class KOReaderProtocolTests: XCTestCase {
         do {
             _ = try await KOReaderSyncClient(settings: settings, password: "", http: http).get(document: "document")
             XCTFail("An invalid remote percentage must not become a reading position")
-        } catch { XCTAssertEqual(error.localizedDescription, "服务器阅读位置无效") }
+        } catch { XCTAssertEqual(error.localizedDescription, String(localized: "The server returned an invalid reading position.")) }
     }
 
     func testAuthenticationFailureIsReportedToCaller() async throws {
@@ -45,6 +45,6 @@ final class KOReaderProtocolTests: XCTestCase {
         do {
             try await KOReaderSyncClient(settings: settings, password: "wrong", http: http).authorize()
             XCTFail("Unauthorized credentials must not be accepted")
-        } catch { XCTAssertEqual(error.localizedDescription, "认证失败，请检查账号与密码") }
+        } catch { XCTAssertEqual(error.localizedDescription, String(localized: "Authentication failed. Check your username and password.")) }
     }
 }

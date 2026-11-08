@@ -58,18 +58,18 @@ import ReadiumNavigator
 
     func go(to locator: Locator, in navigator: EPUBReadingNavigator, isCurrent: () -> Bool) async throws {
         try check(isCurrent)
-        guard await navigator.go(to: locator) else { throw AppFailure("无法跳转到指定位置") }
+        guard await navigator.go(to: locator) else { throw AppFailure("Couldn’t jump to the selected position.") }
         try await settle(isCurrent)
     }
 
     func go(to link: Link, in navigator: EPUBReadingNavigator, isCurrent: () -> Bool) async throws {
         try check(isCurrent)
-        guard await navigator.go(to: link) else { throw AppFailure("无法打开章节") }
+        guard await navigator.go(to: link) else { throw AppFailure("Couldn’t open the chapter.") }
         try await settle(isCurrent)
     }
 
     func go(toProgression value: Double, in navigator: EPUBReadingNavigator, isCurrent: () -> Bool) async throws -> Locator {
-        guard let locator = await publication.locate(progression: value) else { throw AppFailure("无法按百分比定位") }
+        guard let locator = await publication.locate(progression: value) else { throw AppFailure("Couldn’t locate the position by percentage.") }
         try await go(to: locator, in: navigator, isCurrent: isCurrent)
         return adjusted(locator)
     }
@@ -95,20 +95,20 @@ import ReadiumNavigator
                 }
                 try await Task.sleep(nanoseconds: 100_000_000)
             }
-            guard loaded else { throw AppFailure("正文恢复超时，请重试") }
+            guard loaded else { throw AppFailure("Restoring the text timed out. Try again.") }
         }
         if let pointer = pointer {
             _ = try await go(toPointer: pointer, in: navigator, isCurrent: isCurrent)
         } else {
-            guard locator != nil else { throw AppFailure("无法读取上次阅读位置") }
+            guard locator != nil else { throw AppFailure("Couldn’t read the last reading position.") }
             try await settle(isCurrent)
         }
     }
 
     func settledPage(in navigator: EPUBNavigatorViewController) async throws -> (locator: Locator, pointer: String) {
-        guard let visible = await navigator.firstVisibleElementLocator() else { throw AppFailure("无法读取翻页后的位置，请重试。") }
+        guard let visible = await navigator.firstVisibleElementLocator() else { throw AppFailure("Couldn’t read the position after turning the page. Try again.") }
         let result = try await navigator.evaluateJavaScript("Math.abs(window.scrollX) / document.scrollingElement.scrollWidth").get()
-        guard let fraction = result as? Double else { throw AppFailure("无法读取翻页后的进度") }
+        guard let fraction = result as? Double else { throw AppFailure("Couldn’t read progress after turning the page.") }
         let locator = adjusted(visible.copy(locations: { $0.progression = min(max(fraction, 0), 1) }))
         return (locator, try await capture(locator, in: navigator))
     }
@@ -186,7 +186,7 @@ struct EPUBTextAnchor {
     let after: String
 
     init(result: [String: Any]) throws {
-        guard let selector = result["cssSelector"] as? String else { throw AppFailure("无法解析远端正文位置") }
+        guard let selector = result["cssSelector"] as? String else { throw AppFailure("Couldn’t resolve the remote reading position.") }
         self.selector = selector
         textNodeIndex = result["textNodeIndex"] as? Int
         textOffset = result["textOffset"] as? Int
@@ -201,7 +201,7 @@ struct EPUBTextAnchor {
         // An empty highlight is required for Readium's element-selector navigation.
         let json: [String: Any] = ["href": link.href, "type": link.mediaType?.string ?? "application/xhtml+xml",
             "locations": locations, "text": ["highlight": highlight, "before": before, "after": after]]
-        guard let locator = try Locator(json: json) else { throw AppFailure("无法生成 Readium 定位") }
+        guard let locator = try Locator(json: json) else { throw AppFailure("Couldn’t create a Readium locator.") }
         return locator
     }
 }

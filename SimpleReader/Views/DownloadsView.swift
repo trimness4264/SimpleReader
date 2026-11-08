@@ -8,8 +8,8 @@ struct DownloadsView: View {
             if manager.jobs.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "arrow.down.circle").font(.largeTitle)
-                    Text("暂无下载").font(.headline)
-                    Text("从在线书库下载的图书会自动加入书库。").font(.subheadline)
+                    Text("No Downloads").font(.headline)
+                    Text("Books downloaded from an online library appear in your library automatically.").font(.subheadline)
                 }.foregroundColor(.secondary).frame(maxWidth: .infinity).padding(.vertical, 32)
             }
             ForEach(manager.jobs) { job in
@@ -18,20 +18,20 @@ struct DownloadsView: View {
                     HStack { Text(label(job.state)).font(.caption).foregroundColor(.secondary); Spacer(); if job.state == .downloading { Text("\(Int(job.progress*100))%").font(.caption.monospacedDigit()) } }
                     if job.state == .downloading { ProgressView(value: job.progress) }
                     if let error = job.error { Text(error).font(.caption).foregroundColor(.red) }
-                    if [.queued, .downloading].contains(job.state) { Button("取消") { manager.cancel(job.id) } }
-                    if [.failed, .cancelled].contains(job.state) { Button("重新下载") { manager.retry(job.id) } }
+                    if [.queued, .downloading].contains(job.state) { Button("Cancel") { manager.cancel(job.id) } }
+                    if [.failed, .cancelled].contains(job.state) { Button("Download Again") { manager.retry(job.id) } }
                 }.padding(.vertical, 6)
             }
-        }.navigationTitle("下载").navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle("Downloads").navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) { Button("关闭") { dismiss() } }
+            ToolbarItem(placement: .navigationBarLeading) { Button("Close") { dismiss() } }
             ToolbarItem(placement: .navigationBarTrailing) {
-                if manager.hasHistory { Button("清除历史") { manager.clearHistory() } }
+                if manager.hasHistory { Button("Clear History") { manager.clearHistory() } }
             }
         }
     }
-    private func label(_ state: DownloadJob.State) -> String {
-        switch state { case .queued: return "等待下载"; case .downloading: return "正在下载"; case .importing: return "正在加入书库"; case .finished: return "已加入书库"; case .failed: return "下载失败"; case .cancelled: return "已取消" }
+    private func label(_ state: DownloadJob.State) -> LocalizedStringKey {
+        switch state { case .queued: return "Queued"; case .downloading: return "Downloading"; case .importing: return "Adding to library"; case .finished: return "Added to library"; case .failed: return "Download failed"; case .cancelled: return "Canceled" }
     }
 }
 
@@ -55,8 +55,8 @@ struct DownloadsToolbarButton: View {
                             }
                         }
                 }
-                .accessibilityLabel("下载")
-                .accessibilityValue("\(manager.activeCount) 项进行中，\(manager.failedCount) 项失败")
+                .accessibilityLabel("Downloads")
+                .accessibilityValue("\(manager.activeCount) active, \(manager.failedCount) failed")
                 .sheet(isPresented: $presented) {
                     NavigationView { DownloadsView(manager: manager) }.navigationViewStyle(.stack)
                 }

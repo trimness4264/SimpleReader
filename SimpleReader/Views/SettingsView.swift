@@ -9,15 +9,15 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section(header: Text("KOReader Sync")) {
-                Button { editing = true } label: { HStack { Text("服务器与账号"); Spacer(); Text(store.settings.sync.username.isEmpty ? "未设置" : store.settings.sync.username).foregroundColor(.secondary) } }
-                Text(store.settings.sync.enabled ? "已启用：打开图书时拉取，关闭时尝试上传。" : "同步未启用").font(.caption).foregroundColor(.secondary)
+                Button { editing = true } label: { HStack { Text("Server and Account"); Spacer(); Text(store.settings.sync.username.isEmpty ? String(localized: "Not configured") : store.settings.sync.username).foregroundColor(.secondary) } }
+                Text(store.settings.sync.enabled ? "Sync is on. Opening a book checks for progress. Closing it attempts to upload." : "Sync is off").font(.caption).foregroundColor(.secondary)
                 Text(sync.status).font(.caption).foregroundColor(.secondary)
             }
-            Section(header: Text("阅读")) { NavigationLink("默认阅读设置", destination: ReaderPreferencesView(store: store, onChange: {})) }
-            Section(header: Text("关于")) {
-                NavigationLink("关于 Simple Reader", destination: AboutView())
+            Section(header: Text("Reading")) { NavigationLink("Default Reading Settings", destination: ReaderPreferencesView(store: store, onChange: {})) }
+            Section(header: Text("About")) {
+                NavigationLink("About Simple Reader", destination: AboutView())
             }
-        }.navigationTitle("设置").sheet(isPresented: $editing) { SyncEditor(environment: environment) }
+        }.navigationTitle("Settings").sheet(isPresented: $editing) { SyncEditor(environment: environment) }
     }
 }
 private struct AboutView: View {
@@ -28,8 +28,8 @@ private struct AboutView: View {
         return iconName.flatMap { UIImage(named: $0) }
     }
     private var appName: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Simple Reader" }
-    private var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知" }
-    private var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知" }
+    private var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? String(localized: "Unknown") }
+    private var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? String(localized: "Unknown") }
     private var minimumOS: String { Bundle.main.object(forInfoDictionaryKey: "MinimumOSVersion") as? String ?? "15.0" }
 
     var body: some View {
@@ -44,29 +44,29 @@ private struct AboutView: View {
                             .accessibilityHidden(true)
                     }
                     Text(appName).font(.title2.bold())
-                    Text("你的本地图书阅读器").font(.subheadline).foregroundColor(.secondary)
+                    Text("Your local book reader").font(.subheadline).foregroundColor(.secondary)
                 }.frame(maxWidth: .infinity).padding(.vertical, 16)
             }
-            Section(header: Text("应用信息")) {
-                informationRow("版本", value: version)
-                informationRow("构建号", value: build)
-                informationRow("支持格式", value: "EPUB、PDF")
-                informationRow("适用设备", value: "iPhone、iPad")
-                informationRow("系统要求", value: "iOS / iPadOS \(minimumOS)+")
+            Section(header: Text("App Information")) {
+                informationRow("Version", value: version)
+                informationRow("Build", value: build)
+                informationRow("Supported Formats", value: ["EPUB", "PDF"].formatted(.list(type: .and)))
+                informationRow("Devices", value: ["iPhone", "iPad"].formatted(.list(type: .and)))
+                informationRow("System Requirements", value: "iOS / iPadOS \(minimumOS)+")
             }
-            Section(header: Text("阅读与同步")) {
-                Text("从文件导入图书，或连接 Calibre OPDS 书库下载；通过 KOReader Sync 在设备间同步阅读位置。")
-                Text("图书与阅读记录保存在本机，同步只传输阅读位置。两端需要使用相同的图书文件；默认按 KOReader 内容摘要匹配，文件名模式需要两端文件名一致。")
+            Section(header: Text("Reading and Sync")) {
+                Text("Import books from Files or download them from a Calibre OPDS library. Use KOReader Sync to sync reading positions across devices.")
+                Text("Books and reading history stay on this device. Only the reading position is synced. Use the same book file on both devices. By default, KOReader matches files by content. Filename matching requires identical filenames.")
                     .font(.footnote).foregroundColor(.secondary)
             }
-            Section(header: Text("开源")) {
-                informationRow("应用许可", value: "AGPL-3.0-or-later")
-                NavigationLink("开源许可与致谢", destination: LicenseView())
+            Section(header: Text("Open Source")) {
+                informationRow("App License", value: "AGPL-3.0-or-later")
+                NavigationLink("Licenses and Acknowledgments", destination: LicenseView())
             }
-        }.navigationTitle("关于").navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle("About").navigationBarTitleDisplayMode(.inline)
     }
 
-    private func informationRow(_ title: String, value: String) -> some View {
+    private func informationRow(_ title: LocalizedStringKey, value: String) -> some View {
         HStack {
             Text(title)
             Spacer()
@@ -100,18 +100,18 @@ private struct SyncEditor: View {
     var body: some View {
         NavigationView {
             Form {
-                TextField("同步服务器地址", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                TextField("已有账号用户名", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField("密码", text: $password)
-                Toggle("启用同步", isOn: $enabled)
-                Toggle("按原始文件名匹配", isOn: $filenameMatching)
-                Button { Task { await verify() } } label: { if checking { ProgressView() } else { Text("验证账号") } }.disabled(checking)
+                TextField("Sync Server Address", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Existing Account Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField("Password", text: $password)
+                Toggle("Enable Sync", isOn: $enabled)
+                Toggle("Match by Original Filename", isOn: $filenameMatching)
+                Button { Task { await verify() } } label: { if checking { ProgressView() } else { Text("Verify Account") } }.disabled(checking)
                 if !verification.isEmpty { Text(verification).foregroundColor(.secondary) }
-                Text("无需修改 KOReader。请在 KOReader 中使用相同服务器、账号和匹配方式。账号可先在 KOReader 注册。").font(.caption).foregroundColor(.secondary)
+                Text("Use the same server, account, and matching method in KOReader. You can register an account in KOReader.").font(.caption).foregroundColor(.secondary)
             }.navigationTitle("KOReader Sync")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .navigationBarTrailing) { Button("保存") { save() }.disabled(checking) }
+                ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) { Button("Save") { save() }.disabled(checking) }
             }
         }.navigationViewStyle(.stack).task { do { password = try environment.accounts.syncPassword() } catch { self.error = error.localizedDescription } }.errorAlert($error)
     }
@@ -120,7 +120,7 @@ private struct SyncEditor: View {
         do {
             try await environment.accounts.verifySync(address: address, username: username, password: password,
                 enabled: enabled, filenameMatching: filenameMatching)
-            verification = "认证成功"
+            verification = String(localized: "Authentication successful")
         }
         catch { self.error = error.localizedDescription }
     }
@@ -133,6 +133,6 @@ private struct SyncEditor: View {
     }
 }
 private struct LicenseView: View {
-    private var notices: String { guard let url = Bundle.main.url(forResource: "THIRD_PARTY_NOTICES", withExtension: "md") else { return "请参阅项目的开源许可说明。" }; return (try? String(contentsOf: url)) ?? "" }
-    var body: some View { ScrollView { Text(notices).font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding() }.navigationTitle("开源许可") }
+    private var notices: String { guard let url = Bundle.main.url(forResource: "THIRD_PARTY_NOTICES", withExtension: "md") else { return String(localized: "See the project’s open-source license notices.") }; return (try? String(contentsOf: url)) ?? "" }
+    var body: some View { ScrollView { Text(notices).font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding() }.navigationTitle("Open-Source Licenses") }
 }
