@@ -35,10 +35,10 @@ struct ReaderView: View {
                     Text(error)
                     Button("重新加载正文") { Task { await session.retryRecovery() } }
                 }.padding().background(Color(UIColor.systemBackground))
-            } else if session.isRestoring {
-                ProgressView("正在恢复阅读位置…")
-            } else if !session.ready && session.error == nil {
-                ProgressView("正在打开…")
+            } else if session.isRestoring || (!session.ready && session.error == nil) {
+                ProgressView(session.isRestoring ? "正在恢复阅读位置…" : "正在打开…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(UIColor.systemBackground))
             }
         }
         .accessibilityAction(named: Text("显示或隐藏阅读操作栏")) { session.toggleControls() }
