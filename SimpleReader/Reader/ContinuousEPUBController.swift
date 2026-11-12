@@ -40,6 +40,7 @@ extension EPUBReadingNavigator {
     private var closed = false
     private var navigating = false
     private var updatingLayout = false
+    private var scrollInsets: UIEdgeInsets = .zero
     private var navigationRevision = 0
     private var locationTask: Task<Void, Never>?
     private var startupTask: Task<Void, Never>?
@@ -112,16 +113,19 @@ extension EPUBReadingNavigator {
         if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle { updateSettings(settings) }
     }
 
-    private var dark: Bool { settings.theme == "dark" || (settings.theme == "system" && traitCollection.userInterfaceStyle == .dark) }
+    private var dark: Bool { settings.theme.isDark ?? (traitCollection.userInterfaceStyle == .dark) }
+    private var backgroundLevel: Int { dark ? 23 : 255 }
+
     private func applyBackground() {
-        let color: UIColor = dark ? UIColor(red: 0.09, green: 0.09, blue: 0.09, alpha: 1) : .systemBackground
+        let color = UIColor(white: CGFloat(backgroundLevel) / 255, alpha: 1)
         view.backgroundColor = color
         scrollView.backgroundColor = color
         for webView in webViews.values { webView.backgroundColor = color }
     }
 
     private var style: String {
-        let background = dark ? "#171717" : "#ffffff"
+        let level = backgroundLevel
+        let background = "rgb(\(level),\(level),\(level))"
         let foreground = dark ? "#e8e8e8" : "#202020"
         let fonts = server.baseURL.appendingPathComponent("_reader/fonts/").absoluteString
         return """
@@ -218,7 +222,7 @@ extension EPUBReadingNavigator {
 
     private func retainChapters(around index: Int) {
         guard !closed else { return }
-        let bottom = (navigating ? origin(of: index) : max(0, scrollView.contentOffset.y)) + scrollView.bounds.height * 2
+        let bottom = (navigating ? origin(of: index) : max(0, readableTop)) + scrollView.bounds.height * 2
         var last = min(heights.count - 1, index + 2)
         while last < heights.count - 1 && origin(of: last) < bottom { last += 1 }
         let range = max(0, index - 2)...last
@@ -236,11 +240,33 @@ extension EPUBReadingNavigator {
     }
 
     private func origin(of index: Int) -> CGFloat { heights.prefix(index).reduce(0, +) }
+    private var readableTop: CGFloat { scrollView.contentOffset.y + scrollInsets.top }
+
+    func updateScrollInsets(_ insets: UIEdgeInsets) {
+        guard scrollInsets != insets else { return }
+        let top = readableTop
+        scrollInsets = insets
+        scrollView.automaticallyAdjustsScrollIndicatorInsets = false
+        scrollView.verticalScrollIndicatorInsets = insets
+        updatingLayout = true
+        alignReadingTop(top)
+        updatingLayout = false
+    }
+
+    private func alignReadingTop(_ top: CGFloat) {
+        let y = max(0, top) - scrollInsets.top
+        var insets = scrollInsets
+        // A short final chapter may need extra space to align a saved anchor.
+        insets.bottom = max(insets.bottom, y + scrollView.bounds.height - scrollView.contentSize.height)
+        scrollView.contentInset = insets
+        scrollView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+    }
+
     private func visibleIndex() -> Int {
         var y: CGFloat = 0
         for index in heights.indices {
             y += heights[index]
-            if y > max(0, scrollView.contentOffset.y) + 1 { return index }
+            if y > max(0, readableTop) + 1 { return index }
         }
         return max(0, heights.count - 1)
     }
@@ -275,7 +301,7 @@ extension EPUBReadingNavigator {
         updatingLayout = true
         heights[index] = value
         layoutChapters()
-        if beforeVisible { scrollView.contentOffset = CGPoint(x: 0, y: max(0, oldOffset.y + delta)) }
+        if beforeVisible { scrollView.contentOffset = CGPoint(x: 0, y: max(-scrollInsets.top, oldOffset.y + delta)) }
         updatingLayout = false
         if !navigating { retainChapters(around: visibleIndex()) }
         scheduleLocation()
@@ -306,7 +332,7 @@ extension EPUBReadingNavigator {
         guard !closed, !navigating, !heights.isEmpty else { return }
         let index = visibleIndex()
         let link = publication.readingOrder[index]
-        let top = max(0, scrollView.contentOffset.y - origin(of: index))
+        let top = max(0, readableTop - origin(of: index))
         let progression = min(1, Double(top / max(1, heights[index])))
         guard let href = AnyURL(string: link.href) else { return }
         let locator = Locator(href: href, mediaType: link.mediaType ?? .xhtml, title: link.title,
@@ -338,8 +364,8 @@ extension EPUBReadingNavigator {
                 publication.readingOrder.firstIndex { EPUBPositionBridge.normalize($0.href) == EPUBPositionBridge.normalize(location.href.string) }
             } ?? visibleIndex()
             let webView = try await waitForChapter(index)
-            let top = max(0, scrollView.contentOffset.y - origin(of: index))
-            let bottom = min(heights[index], scrollView.contentOffset.y + scrollView.bounds.height - origin(of: index))
+            let top = max(0, readableTop - origin(of: index))
+            let bottom = min(heights[index], scrollView.contentOffset.y + scrollView.bounds.height - scrollInsets.bottom - origin(of: index))
             let prefix = "window.SimpleReaderViewport={top:\(top)-window.scrollY,bottom:\(max(top, bottom))-window.scrollY};\n"
             return .success(try await webView.evaluateJavaScript(prefix + script) as Any)
         } catch { return .failure(error) }
@@ -403,9 +429,7 @@ extension EPUBReadingNavigator {
             let localY = try await webView.evaluateJavaScript(script) as? Double ?? 0
             guard !closed, revision == navigationRevision else { return false }
             let offset = min(max(0, origin(of: index) + CGFloat(localY)), max(0, scrollView.contentSize.height - 1))
-            // Reserve only the space needed to align this anchor in a short final chapter.
-            scrollView.contentInset.bottom = max(0, offset + scrollView.bounds.height - scrollView.contentSize.height)
-            scrollView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+            alignReadingTop(offset)
             currentLocation = locator
             onLocationChanged?(locator)
             return true

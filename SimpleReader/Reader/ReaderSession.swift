@@ -46,6 +46,7 @@ struct SyncPrompt: Identifiable {
         return epub
     }
     private var pdf: PDFView?
+    private var scrollInsets: UIEdgeInsets?
     private var pdfControlsTap: PDFControlsTap?
     private var pageObserver: NSObjectProtocol?
     private var saving: Task<Void, Never>?
@@ -82,11 +83,12 @@ struct SyncPrompt: Identifiable {
         super.init()
         container.onLayout = { [weak self] size, idiom in
             self?.updatePageLayout(size: size, idiom: idiom)
+            self?.updatePDFScrollInsets()
         }
         container.onLayoutWillChange = { [weak self] in self?.protectPosition() }
         container.onLayoutDidChange = { [weak self] in self?.scheduleRestoration() }
         container.onAppearanceChange = { [weak self] in
-            guard let self = self, self.store.settings.reader.theme == "system" else { return }
+            guard let self = self, self.store.settings.reader.theme == .system else { return }
             self.updatePreferences()
         }
         container.pageTurnDelegate = self
@@ -205,9 +207,10 @@ struct SyncPrompt: Identifiable {
             }
             container.view.layoutIfNeeded()
             view.layoutIfNeeded()
+            updatePDFScrollInsets()
             if let index = book.position?.pdfPage,
                let target = document.page(at: min(max(index, 0), document.pageCount - 1)) {
-                view.go(to: target)
+                goToPDFPage(target, in: view)
             }
             guard let page = view.currentPage else { throw AppFailure("Couldn’t restore the PDF reading position.") }
             let index = document.index(for: page)
@@ -223,17 +226,12 @@ struct SyncPrompt: Identifiable {
     }
     private func preferences() -> EPUBPreferences {
         let settings = store.settings.reader
-        let theme: Theme
-        switch settings.theme {
-        case "light": theme = .light
-        case "dark": theme = .dark
-        default: theme = container.traitCollection.userInterfaceStyle == .dark ? .dark : .light
-        }
+        let dark = settings.theme.isDark ?? (container.traitCollection.userInterfaceStyle == .dark)
         let twoPages = displaysTwoPages && !isScrolling
         return EPUBPreferences(columnCount: twoPages ? .two : .one,
             fontFamily: FontFamily(rawValue: settings.font.familyName), fontSize: settings.fontSize / 100,
             lineHeight: settings.lineHeight, pageMargins: settings.pageMargins,
-            publisherStyles: false, scroll: false, spread: twoPages ? .always : .never, theme: theme)
+            publisherStyles: false, scroll: false, spread: twoPages ? .always : .never, theme: dark ? .dark : .light)
     }
     private func updatePageLayout(size: CGSize, idiom: UIUserInterfaceIdiom) {
         let twoPages = ReaderPageLayout.displaysTwoPages(size: size, idiom: idiom)
@@ -244,9 +242,57 @@ struct SyncPrompt: Identifiable {
             let page = pdf.currentPage
             pdf.displayMode = twoPages ? .twoUpContinuous : .singlePageContinuous
             pdf.autoScales = true
-            if let page = page { pdf.go(to: page) }
+            if let page = page { goToPDFPage(page, in: pdf) }
         }
     }
+
+    func updateScrollInsets(_ insets: UIEdgeInsets?) {
+        guard scrollInsets != insets else { return }
+        scrollInsets = insets
+        continuous?.updateScrollInsets(insets ?? .zero)
+        updatePDFScrollInsets()
+    }
+
+    private var pdfScrollView: UIScrollView? {
+        guard let pdf = pdf else { return nil }
+        // PDFKit owns the scroll view. Find it through the public document view.
+        var ancestor = pdf.documentView?.superview
+        while let view = ancestor, view !== pdf {
+            if let scrollView = view as? UIScrollView { return scrollView }
+            ancestor = view.superview
+        }
+        return nil
+    }
+
+    private func updatePDFScrollInsets() {
+        guard let insets = scrollInsets, let scrollView = pdfScrollView else { return }
+        var contentInset = scrollView.contentInset
+        contentInset.top = insets.top
+        contentInset.bottom = insets.bottom
+        guard scrollView.contentInset != contentInset || scrollView.contentInsetAdjustmentBehavior != .never else { return }
+        let top = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.automaticallyAdjustsScrollIndicatorInsets = false
+        scrollView.contentInset = contentInset
+        scrollView.verticalScrollIndicatorInsets = insets
+        setPDFScrollOffset(top - insets.top, in: scrollView)
+    }
+
+    private func setPDFScrollOffset(_ y: CGFloat, in scrollView: UIScrollView) {
+        let insets = scrollView.adjustedContentInset
+        let bottom = scrollView.contentSize.height - scrollView.bounds.height + insets.bottom
+        let offset = max(-insets.top, min(y, bottom))
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: offset), animated: false)
+    }
+
+    private func goToPDFPage(_ page: PDFPage, in pdf: PDFView) {
+        pdf.go(to: page)
+        guard let insets = scrollInsets, let scrollView = pdfScrollView else { return }
+        pdf.layoutIfNeeded()
+        let pageTop = pdf.convert(page.bounds(for: pdf.displayBox), from: page).minY
+        setPDFScrollOffset(scrollView.contentOffset.y + pageTop - pdf.bounds.minY - insets.top, in: scrollView)
+    }
+
     private func adjusted(_ locator: Locator) -> Locator { epubPosition?.adjusted(locator) ?? locator }
     func updatePreferences() {
         protectPosition()
@@ -271,6 +317,7 @@ struct SyncPrompt: Identifiable {
             navigator.onLocationChanged = { [weak self] location in self?.locationChanged(location) }
             navigator.onError = { [weak self] error in self?.error = error.localizedDescription }
             navigator.onContentTap = { [weak self] in self?.toggleControls() }
+            if let scrollInsets = scrollInsets { navigator.updateScrollInsets(scrollInsets) }
             continuous = navigator
             container.replaceChild(with: navigator)
             return
@@ -314,7 +361,8 @@ struct SyncPrompt: Identifiable {
         let bounds = page.bounds(for: pdf.displayBox)
         // PDFView.currentDestination can describe the viewport's lower edge on
         // iPad. Returning to that point would advance into the following page.
-        var point = pdf.convert(CGPoint(x: pdf.bounds.minX, y: pdf.bounds.minY), to: page)
+        let top = pdf.bounds.minY + (scrollInsets?.top ?? 0)
+        var point = pdf.convert(CGPoint(x: pdf.bounds.minX, y: top), to: page)
         point.x = min(max(point.x, bounds.minX), bounds.maxX)
         point.y = min(max(point.y, bounds.minY), bounds.maxY)
         return PDFDestination(page: page, at: point)
@@ -553,7 +601,7 @@ struct SyncPrompt: Identifiable {
         if let pdf = pdf, let doc = pdf.document, let page = pdf.currentPage {
             let index = ReaderPageLayout.nextPDFPage(current: doc.index(for: page), forward: towardLeft, twoPages: displaysTwoPages)
             guard let target = doc.page(at: index) else { return false }
-            pdf.go(to: target)
+            goToPDFPage(target, in: pdf)
             return true
         }
         return false
@@ -607,7 +655,7 @@ struct SyncPrompt: Identifiable {
             switch target {
             case .page(let index):
                 guard let page = pdf.document?.page(at: index) else { throw AppFailure("Page number outside this book’s range.") }
-                pdf.go(to: page)
+                goToPDFPage(page, in: pdf)
             case .checkpoint(let saved):
                 guard let destination = saved.destination else { throw AppFailure("Couldn’t return to the previous position.") }
                 pdf.go(to: destination)
@@ -749,8 +797,8 @@ struct SyncPrompt: Identifiable {
                 guard isCurrent() else { return }
                 position = ReadingPosition(progression: remote.percentage ?? 0, locatorJSON: locator.jsonString, xpointer: approximate ? nil : remote.progress, updatedAt: Date())
             } else {
-                guard let raw = remote.progress, let page = Int(raw), page > 0, let document = pdf?.document, let target = document.page(at: page-1) else { throw AppFailure("The remote PDF page number is outside this book’s range.") }
-                pdf?.go(to: target)
+                guard let raw = remote.progress, let page = Int(raw), page > 0, let pdf = pdf, let document = pdf.document, let target = document.page(at: page-1) else { throw AppFailure("The remote PDF page number is outside this book’s range.") }
+                goToPDFPage(target, in: pdf)
                 position = ReadingPosition(progression: Double(page)/Double(document.pageCount), pdfPage: page-1, updatedAt: Date())
             }
             try sync.acceptRemote(remote, id: bookID, position: position)

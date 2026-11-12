@@ -61,9 +61,21 @@ enum ReaderFont: String, Codable {
         }
     }
 }
+enum ReaderTheme: String, Codable {
+    case system, light, dark
+
+    var isDark: Bool? {
+        switch self {
+        case .system: return nil
+        case .light: return false
+        case .dark: return true
+        }
+    }
+}
+
 struct ReaderSettings: Codable {
     var fontSize: Double = 110
-    var theme = "system"
+    var theme: ReaderTheme = .system
     var layout: ReadingLayout = .paginated
     var font: ReaderFont = .serif
     var lineHeight: Double = 1.65
@@ -75,7 +87,9 @@ struct ReaderSettings: Codable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         fontSize = try values.decodeIfPresent(Double.self, forKey: .fontSize) ?? 110
-        theme = try values.decodeIfPresent(String.self, forKey: .theme) ?? "system"
+        if let value = try values.decodeIfPresent(String.self, forKey: .theme) {
+            theme = ReaderTheme(rawValue: value) ?? .system
+        }
         layout = try values.decodeIfPresent(ReadingLayout.self, forKey: .layout) ?? .paginated
         font = try values.decodeIfPresent(ReaderFont.self, forKey: .font) ?? .serif
         lineHeight = try values.decodeIfPresent(Double.self, forKey: .lineHeight) ?? 1.65

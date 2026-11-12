@@ -2,15 +2,29 @@ import SwiftUI
 
 private struct ReaderSurface: UIViewControllerRepresentable {
     let session: ReaderSession
+    let scrollInsets: UIEdgeInsets?
+
     func makeUIViewController(context: Context) -> UIViewController { session.container }
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        session.updateScrollInsets(scrollInsets)
+    }
 }
+
+private struct ReaderBarHeights: PreferenceKey {
+    static let defaultValue: [Edge: CGFloat] = [:]
+
+    static func reduce(value: inout [Edge: CGFloat], nextValue: () -> [Edge: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: max)
+    }
+}
+
 struct ReaderView: View {
     @StateObject private var session: ReaderSession
     @ObservedObject private var store: LibraryStore
     @ObservedObject private var sync: SyncCoordinator
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var phase
+    @State private var barHeights: [Edge: CGFloat] = [:]
     @State private var showContents = false
     @State private var showPreferences = false
     @State private var showPageJump = false
@@ -26,8 +40,28 @@ struct ReaderView: View {
         self.store = store; self.sync = sync
         _session = StateObject(wrappedValue: session)
     }
+
+    private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    private var isEPUB: Bool { store.book(session.bookID)?.format == .epub }
+    private var isPagedEPUB: Bool { isEPUB && !session.isScrolling }
+    private var readerColorScheme: ColorScheme? {
+        store.settings.reader.theme.isDark.map { $0 ? .dark : .light }
+    }
+
     var body: some View {
-        ReaderSurface(session: session)
+        GeometryReader { geometry in
+            let topBar = session.controlsVisible ? barHeights[.top, default: 0] : 0
+            let bottomBar = session.controlsVisible || session.syncError != nil ? barHeights[.bottom, default: 0] : 0
+            let scrollInsets = isPhone && !isPagedEPUB ? UIEdgeInsets(
+                top: geometry.safeAreaInsets.top + topBar, left: 0,
+                bottom: geometry.safeAreaInsets.bottom + bottomBar, right: 0
+            ) : nil
+            ReaderSurface(session: session, scrollInsets: scrollInsets)
+                // Readium already reserves the window's safe area inside its pages.
+                .padding(.top, isPhone && isPagedEPUB ? topBar : 0)
+                .padding(.bottom, isPhone && isPagedEPUB ? bottomBar : 0)
+                .ignoresSafeArea(.container, edges: isPhone ? .vertical : [])
+        }
         .ignoresSafeArea(.keyboard)
         .overlay {
             if let error = session.recoveryError {
@@ -44,7 +78,11 @@ struct ReaderView: View {
             }
         }
         .accessibilityAction(named: Text("Show or hide reading controls")) { session.toggleControls() }
-        .overlay(alignment: .top) { if session.controlsVisible { topControls.transition(.opacity) } }
+        .overlay(alignment: .top) {
+            if session.controlsVisible {
+                topControls.background { barHeight(.top) }.transition(.opacity)
+            }
+        }
         .overlay(alignment: .bottom) {
             VStack(spacing: 4) {
                 if session.syncError != nil {
@@ -61,9 +99,16 @@ struct ReaderView: View {
                     }.accessibilityLabel("\(session.progressLabel), show reading controls")
                 }
             }
+            .background {
+                if session.controlsVisible || session.syncError != nil {
+                    barHeight(.bottom)
+                }
+            }
         }
-        .preferredColorScheme(store.settings.reader.theme == "dark" ? .dark : store.settings.reader.theme == "light" ? .light : nil)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: session.controlsVisible)
+        .onPreferenceChange(ReaderBarHeights.self) { barHeights = $0 }
+        .preferredColorScheme(readerColorScheme)
+        .statusBarHidden(isPhone)
+        .animation(isPhone || reduceMotion ? nil : .easeInOut(duration: 0.18), value: session.controlsVisible)
         .task { await session.load() }
         .onChange(of: phase) { value in
             switch value {
@@ -92,6 +137,12 @@ struct ReaderView: View {
             Button("Retry") { Task { await session.synchronize(userInitiated: true) } }
             Button("Close", role: .cancel) {}
         } message: { Text(session.syncMessage ?? sync.status) }
+    }
+
+    private func barHeight(_ edge: Edge) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: ReaderBarHeights.self, value: [edge: geometry.size.height])
+        }
     }
 
     private var topControls: some View {
@@ -146,7 +197,7 @@ struct ReaderView: View {
                     Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }.accessibilityLabel("Next page")
                 }
                 Spacer()
-                if store.book(session.bookID)?.format == .epub {
+                if isEPUB {
                     Button { showPreferences = true } label: { Image(systemName: "textformat.size").frame(width: 44, height: 44) }
                         .accessibilityLabel("Reading Settings").disabled(!session.ready || session.isNavigating)
                 } else {
@@ -382,7 +433,9 @@ struct ReaderPreferencesView: View {
                     }
                 }
                 Picker("Theme", selection: Binding(get: { store.settings.reader.theme }, set: { value in save { $0.theme = value } })) {
-                    Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
+                    Text("System").tag(ReaderTheme.system)
+                    Text("Light").tag(ReaderTheme.light)
+                    Text("Dark").tag(ReaderTheme.dark)
                 }
             }.navigationTitle("Reading Settings").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
