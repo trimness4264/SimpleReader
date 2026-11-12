@@ -10,10 +10,14 @@ private struct ReaderSurface: UIViewControllerRepresentable {
     }
 }
 
-private struct ReaderBarHeights: PreferenceKey {
-    static let defaultValue: [Edge: CGFloat] = [:]
+private enum ReaderBar {
+    case top, bottom, syncStatus
+}
 
-    static func reduce(value: inout [Edge: CGFloat], nextValue: () -> [Edge: CGFloat]) {
+private struct ReaderBarHeights: PreferenceKey {
+    static let defaultValue: [ReaderBar: CGFloat] = [:]
+
+    static func reduce(value: inout [ReaderBar: CGFloat], nextValue: () -> [ReaderBar: CGFloat]) {
         value.merge(nextValue(), uniquingKeysWith: max)
     }
 }
@@ -24,7 +28,8 @@ struct ReaderView: View {
     @ObservedObject private var sync: SyncCoordinator
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var phase
-    @State private var barHeights: [Edge: CGFloat] = [:]
+    @State private var barHeights: [ReaderBar: CGFloat] = [:]
+    @State private var showRestorationProgress = false
     @State private var showContents = false
     @State private var showPreferences = false
     @State private var showPageJump = false
@@ -47,11 +52,19 @@ struct ReaderView: View {
     private var readerColorScheme: ColorScheme? {
         store.settings.reader.theme.isDark.map { $0 ? .dark : .light }
     }
+    private var controlsAnimation: Animation {
+        .easeInOut(duration: reduceMotion ? 0.15 : 0.25)
+    }
+
+    private func controlsTransition(verticalOffset: CGFloat) -> AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: verticalOffset))
+    }
 
     var body: some View {
         GeometryReader { geometry in
             let topBar = session.controlsVisible ? barHeights[.top, default: 0] : 0
-            let bottomBar = session.controlsVisible || session.syncError != nil ? barHeights[.bottom, default: 0] : 0
+            let bottomBar = session.controlsVisible ? barHeights[.bottom, default: 0]
+                : session.syncError != nil ? barHeights[.syncStatus, default: 0] : 0
             let scrollInsets = isPhone && !isPagedEPUB ? UIEdgeInsets(
                 top: geometry.safeAreaInsets.top + topBar, left: 0,
                 bottom: geometry.safeAreaInsets.bottom + bottomBar, right: 0
@@ -69,46 +82,33 @@ struct ReaderView: View {
                     Text(error)
                     Button("Reload Book") { Task { await session.retryRecovery() } }
                 }.padding().background(Color(UIColor.systemBackground))
-            } else if session.isRestoring || (!session.ready && session.error == nil) {
-                ProgressView {
-                    Text(session.isRestoring ? LocalizedStringKey("Restoring reading position…") : LocalizedStringKey("Opening…"))
-                }
+            } else if !session.ready && session.error == nil {
+                ProgressView("Opening…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(UIColor.systemBackground))
+            } else if session.isRestoring && showRestorationProgress {
+                ProgressView("Restoring reading position…")
+                    .padding(16)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
         .accessibilityAction(named: Text("Show or hide reading controls")) { session.toggleControls() }
-        .overlay(alignment: .top) {
-            if session.controlsVisible {
-                topControls.background { barHeight(.top) }.transition(.opacity)
-            }
+        .overlay(alignment: .top) { topOverlay }
+        .overlay(alignment: .bottom) { bottomOverlay }
+        .onPreferenceChange(ReaderBarHeights.self) { heights in
+            // Keep the last measurement while controls are hidden so they can reserve space immediately.
+            barHeights.merge(heights) { _, height in height }
         }
-        .overlay(alignment: .bottom) {
-            VStack(spacing: 4) {
-                if session.syncError != nil {
-                    Button { showSyncStatus = true } label: {
-                        Label("Sync failed. Tap for details.", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
-                            .font(.caption).padding(12).background(.regularMaterial, in: Capsule())
-                    }
-                }
-                if session.controlsVisible { bottomControls.transition(.opacity) }
-                else if showProgress {
-                    Button { session.toggleControls() } label: {
-                        Text(session.progressLabel).font(.caption.monospacedDigit())
-                            .padding(.horizontal, 12).frame(minHeight: 44).background(.regularMaterial, in: Capsule())
-                    }.accessibilityLabel("\(session.progressLabel), show reading controls")
-                }
-            }
-            .background {
-                if session.controlsVisible || session.syncError != nil {
-                    barHeight(.bottom)
-                }
-            }
-        }
-        .onPreferenceChange(ReaderBarHeights.self) { barHeights = $0 }
         .preferredColorScheme(readerColorScheme)
         .statusBarHidden(isPhone)
-        .animation(isPhone || reduceMotion ? nil : .easeInOut(duration: 0.18), value: session.controlsVisible)
+        .task(id: session.isRestoring) {
+            showRestorationProgress = false
+            guard session.isRestoring else { return }
+            // A short pagination pass should not flash a loading screen over the page.
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+            showRestorationProgress = true
+        }
         .task { await session.load() }
         .onChange(of: phase) { value in
             switch value {
@@ -139,9 +139,49 @@ struct ReaderView: View {
         } message: { Text(session.syncMessage ?? sync.status) }
     }
 
-    private func barHeight(_ edge: Edge) -> some View {
+    private var topOverlay: some View {
+        ZStack {
+            if session.controlsVisible {
+                topControls
+                    .background { barHeight(.top) }
+                    .transition(controlsTransition(verticalOffset: -8))
+            }
+        }
+        .animation(controlsAnimation, value: session.controlsVisible)
+    }
+
+    private var bottomOverlay: some View {
+        VStack(spacing: 4) {
+            if session.syncError != nil {
+                Button { showSyncStatus = true } label: {
+                    Label("Sync failed. Tap for details.", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                        .font(.caption).padding(12).background(.regularMaterial, in: Capsule())
+                }
+            }
+            if session.controlsVisible {
+                bottomControls.transition(controlsTransition(verticalOffset: 8))
+            } else if showProgress {
+                Button { session.toggleControls() } label: {
+                    Text(session.progressLabel).font(.caption.monospacedDigit())
+                        .padding(.horizontal, 12).frame(minHeight: 44).background(.regularMaterial, in: Capsule())
+                }
+                .accessibilityLabel("\(session.progressLabel), show reading controls")
+                .transition(.opacity)
+            }
+        }
+        .background {
+            if session.controlsVisible {
+                barHeight(.bottom)
+            } else if session.syncError != nil {
+                barHeight(.syncStatus)
+            }
+        }
+        .animation(controlsAnimation, value: session.controlsVisible)
+    }
+
+    private func barHeight(_ bar: ReaderBar) -> some View {
         GeometryReader { geometry in
-            Color.clear.preference(key: ReaderBarHeights.self, value: [edge: geometry.size.height])
+            Color.clear.preference(key: ReaderBarHeights.self, value: [bar: geometry.size.height])
         }
     }
 
