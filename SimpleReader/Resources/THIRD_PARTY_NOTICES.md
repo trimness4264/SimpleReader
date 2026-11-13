@@ -18,12 +18,12 @@ sync are not embedded. The adaptation was made on 2026-10-06.
 ## Readium Swift Toolkit 3.8.0
 https://github.com/readium/swift-toolkit/tree/3.8.0
 Copyright 2026 Readium Foundation. BSD-3-Clause.
-The original license is included under Docs/Licenses/Readium.txt.
+The original license is bundled in Licenses/Readium.txt.
 
 Readium's resolved transitive libraries include CryptoSwift (Apache-2.0),
 DifferenceKit (Apache-2.0), Fuzi (MIT), ZIPFoundation (MIT), Zip (MIT),
 SwiftSoup (MIT). The dependency sources and their license texts are available
-in the pinned Swift Package checkouts; see Docs/Licenses for bundled notices.
+in the pinned Swift Package checkouts. The app bundles the texts in Licenses.
 
 ## LXGW WenKai 1.522
 Source: https://github.com/lxgw/LxgwWenKai/releases/tag/v1.522

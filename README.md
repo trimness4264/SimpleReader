@@ -47,4 +47,4 @@ python3 Scripts/test_vphone.py iphone-16
 
 ## 许可证
 
-Simple Reader 使用 AGPL-3.0-or-later 许可证，详见 [LICENSE](LICENSE)。第三方组件和来源说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，许可证文本位于 `Docs/Licenses` 和应用资源中。
+Simple Reader 使用 AGPL-3.0-or-later 许可证，详见 [LICENSE](LICENSE)。第三方组件和来源说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，许可证文本位于 [SimpleReader/Resources/Licenses](SimpleReader/Resources/Licenses)，并随应用打包。
