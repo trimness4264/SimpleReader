@@ -2,7 +2,9 @@ import SwiftUI
 
 struct DownloadsView: View {
     @ObservedObject var manager: DownloadManager
+    let environment: AppEnvironment
     @Environment(\.dismiss) private var dismiss
+    @State private var reading: Book?
     var body: some View {
         List {
             if manager.jobs.isEmpty {
@@ -13,13 +15,15 @@ struct DownloadsView: View {
                 }.foregroundColor(.secondary).frame(maxWidth: .infinity).padding(.vertical, 32)
             }
             ForEach(manager.jobs) { job in
+                let actions = manager.actions(for: job)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(job.title).font(.headline)
-                    HStack { Text(label(job.state)).font(.caption).foregroundColor(.secondary); Spacer(); if job.state == .downloading { Text("\(Int(job.progress*100))%").font(.caption.monospacedDigit()) } }
+                    HStack { Text(label(job.state, bookID: actions.bookID)).font(.caption).foregroundColor(.secondary); Spacer(); if job.state == .downloading { Text("\(Int(job.progress*100))%").font(.caption.monospacedDigit()) } }
                     if job.state == .downloading { ProgressView(value: job.progress) }
                     if let error = job.error { Text(error).font(.caption).foregroundColor(.red) }
-                    if [.queued, .downloading].contains(job.state) { Button("Cancel") { manager.cancel(job.id) } }
-                    if [.failed, .cancelled].contains(job.state) { Button("Download Again") { manager.retry(job.id) } }
+                    if actions.canCancel { Button("Cancel") { manager.cancel(job.id) } }
+                    if actions.canRetry { Button("Download Again") { manager.retry(job.id) } }
+                    if let id = actions.bookID { Button("Read") { reading = environment.store.book(id) } }
                 }.padding(.vertical, 6)
             }
         }.navigationTitle("Downloads").navigationBarTitleDisplayMode(.inline)
@@ -29,14 +33,16 @@ struct DownloadsView: View {
                 if manager.hasHistory { Button("Clear History") { manager.clearHistory() } }
             }
         }
+        .fullScreenCover(item: $reading) { book in ReaderView(bookID: book.id, environment: environment) }
     }
-    private func label(_ state: DownloadJob.State) -> LocalizedStringKey {
-        switch state { case .queued: return "Queued"; case .downloading: return "Downloading"; case .importing: return "Adding to library"; case .finished: return "Added to library"; case .failed: return "Download failed"; case .cancelled: return "Canceled" }
+    private func label(_ state: DownloadJob.State, bookID: UUID?) -> LocalizedStringKey {
+        switch state { case .queued: return "Queued"; case .downloading: return "Downloading"; case .importing: return "Adding to library"; case .finished: return bookID == nil ? "Removed from library" : "Added to library"; case .failed: return "Download failed"; case .cancelled: return "Canceled" }
     }
 }
 
 struct DownloadsToolbarButton: View {
     @ObservedObject var manager: DownloadManager
+    let environment: AppEnvironment
     var alwaysVisible = false
     @State private var presented = false
 
@@ -58,7 +64,7 @@ struct DownloadsToolbarButton: View {
                 .accessibilityLabel("Downloads")
                 .accessibilityValue("\(manager.activeCount) active, \(manager.failedCount) failed")
                 .sheet(isPresented: $presented) {
-                    NavigationView { DownloadsView(manager: manager) }.navigationViewStyle(.stack)
+                    NavigationView { DownloadsView(manager: manager, environment: environment) }.navigationViewStyle(.stack)
                 }
             }
         }

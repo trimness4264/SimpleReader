@@ -1,4 +1,5 @@
 import XCTest
+import PDFKit
 @testable import SimpleReader
 
 @MainActor final class PageTurnTests: XCTestCase {
@@ -46,5 +47,26 @@ import XCTest
         XCTAssertFalse(session.container.isTurningPage)
         XCTAssertTrue(session.container.view.isUserInteractionEnabled)
         await session.close()
+    }
+
+    func testPDFTwoPageLayoutKeepsTheSelectedPageAtTheReadableTop() async throws {
+        let controller = UIViewController()
+        let window = present(controller)
+        defer { window.isHidden = true }
+        let source = try pdfFile(in: temporaryDirectory())
+        let insets = UIEdgeInsets(top: 44, left: 0, bottom: 30, right: 0)
+        let reader = try PDFReader(url: source, in: controller.view, twoPages: false, insets: insets) { _, _ in }
+        _ = try await reader.open(at: 2, updatedAt: Date())
+        let checkpoint = try XCTUnwrap(reader.checkpoint(at: 2))
+
+        controller.view.frame.size = CGSize(width: 980, height: 640)
+        reader.updateLayout(twoPages: true)
+        let position = try await reader.move(to: .checkpoint(checkpoint))
+
+        let view = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? PDFView }.first)
+        let page = try XCTUnwrap(view.document?.page(at: 2))
+        XCTAssertEqual(view.displayMode, .twoUpContinuous)
+        XCTAssertEqual(position.pdfPage, 2)
+        XCTAssertEqual(view.convert(page.bounds(for: view.displayBox), from: page).minY, insets.top, accuracy: 2)
     }
 }

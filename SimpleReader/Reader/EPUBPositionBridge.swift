@@ -99,7 +99,7 @@ import WebKit
         guard let pointer = value as? String else { throw AppFailure("Couldn’t get the EPUB reading position.") }
         return pointer
     }
-    static func locator(pointer: String, navigator: EPUBReadingNavigator, spine: [String]? = nil, isCurrent: () -> Bool) async throws -> Locator {
+    static func locator(pointer: String, navigator: EPUBReadingNavigator, spine: [String]? = nil, isCurrent: @MainActor () -> Bool) async throws -> Locator {
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
         let index = try spineIndex(pointer)

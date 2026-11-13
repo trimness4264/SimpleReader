@@ -18,6 +18,7 @@ import XCTest
         let job = try XCTUnwrap(manager.job(for: link))
 
         manager.cancel(job.id)
+        XCTAssertFalse(manager.actions(for: try XCTUnwrap(manager.job(for: link))).canRetry)
         finish?.resume()
         let removed = expectation(for: NSPredicate { _, _ in
             !FileManager.default.fileExists(atPath: file.path)
@@ -27,6 +28,7 @@ import XCTest
         XCTAssertTrue(store.books.isEmpty)
         XCTAssertNil(manager.job(for: link)?.bookID)
         XCTAssertEqual(manager.job(for: link)?.state, .cancelled)
+        XCTAssertTrue(manager.actions(for: try XCTUnwrap(manager.job(for: link))).canRetry)
     }
 
     func testFailedDownloadCanRetryAndExposeImportedBook() async throws {
@@ -51,7 +53,12 @@ import XCTest
         XCTAssertEqual(finished.id, failed.id)
         XCTAssertNil(finished.error)
         let id = try XCTUnwrap(finished.bookID)
-        XCTAssertEqual(store.book(id)?.format, .pdf)
+        let imported = try XCTUnwrap(store.book(id))
+        XCTAssertEqual(imported.format, .pdf)
+        XCTAssertEqual(manager.actions(for: finished).bookID, id)
+        try store.delete(imported)
+        XCTAssertNil(manager.actions(for: finished).bookID)
+        XCTAssertTrue(manager.actions(for: finished).canRetry)
     }
 
     private func downloadLink() -> OPDSLink {

@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A7C18000000000000000000B /* SimpleReader/Reader/ContinuousEPUBLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000000C /* SimpleReader/Reader/ContinuousEPUBLayout.swift */; };
+		A7C180000000000000000009 /* SimpleReader/Reader/PDFReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000000A /* SimpleReader/Reader/PDFReader.swift */; };
+		A7C180000000000000000007 /* SimpleReader/Reader/ReaderPositionSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000008 /* SimpleReader/Reader/ReaderPositionSession.swift */; };
 		C11000000000000000000001 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = C11000000000000000000003 /* Localizable.strings */; };
 		C11000000000000000000002 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = C11000000000000000000004 /* InfoPlist.strings */; };
 		000000000000000000000029 /* SimpleReader/App/SimpleReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */; };
@@ -70,6 +73,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A7C18000000000000000000C /* SimpleReader/Reader/ContinuousEPUBLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousEPUBLayout.swift; sourceTree = "<group>"; };
+		A7C18000000000000000000A /* SimpleReader/Reader/PDFReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/PDFReader.swift; sourceTree = "<group>"; };
+		A7C180000000000000000008 /* SimpleReader/Reader/ReaderPositionSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReaderPositionSession.swift; sourceTree = "<group>"; };
 		C11000000000000000000005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "en"; path = "SimpleReader/Resources/en.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		C11000000000000000000006 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "SimpleReader/Resources/zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		C11000000000000000000007 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "en"; path = "SimpleReader/Resources/en.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
@@ -167,7 +173,10 @@
 				000000000000000000000004 /* SimpleReader/Persistence/LibraryStore.swift */,
 				000000000000000000000005 /* SimpleReader/Reader/EPUBPositionBridge.swift */,
 				000000000000000000000006 /* SimpleReader/Reader/ReaderSession.swift */,
+				A7C180000000000000000008 /* SimpleReader/Reader/ReaderPositionSession.swift */,
+				A7C18000000000000000000A /* SimpleReader/Reader/PDFReader.swift */,
 				000000000000000000000064 /* SimpleReader/Reader/ContinuousEPUBController.swift */,
+				A7C18000000000000000000C /* SimpleReader/Reader/ContinuousEPUBLayout.swift */,
 				000000000000000000000066 /* SimpleReader/Reader/ContinuousPublicationServer.swift */,
 				000000000000000000000007 /* SimpleReader/Services/BookHashing.swift */,
 				000000000000000000000008 /* SimpleReader/Services/BookImportService.swift */,
@@ -336,7 +345,10 @@
 				00000000000000000000002C /* SimpleReader/Persistence/LibraryStore.swift in Sources */,
 				00000000000000000000002D /* SimpleReader/Reader/EPUBPositionBridge.swift in Sources */,
 				00000000000000000000002E /* SimpleReader/Reader/ReaderSession.swift in Sources */,
+				A7C180000000000000000007 /* SimpleReader/Reader/ReaderPositionSession.swift in Sources */,
+				A7C180000000000000000009 /* SimpleReader/Reader/PDFReader.swift in Sources */,
 				000000000000000000000065 /* SimpleReader/Reader/ContinuousEPUBController.swift in Sources */,
+				A7C18000000000000000000B /* SimpleReader/Reader/ContinuousEPUBLayout.swift in Sources */,
 				000000000000000000000067 /* SimpleReader/Reader/ContinuousPublicationServer.swift in Sources */,
 				00000000000000000000002F /* SimpleReader/Services/BookHashing.swift in Sources */,
 				000000000000000000000030 /* SimpleReader/Services/BookImportService.swift in Sources */,

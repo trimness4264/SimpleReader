@@ -69,7 +69,7 @@ import Combine
 }
 
 @MainActor final class BookImportService {
-    private let store: LibraryStore
+    let store: LibraryStore
     private let readium: ReadiumService
     init(store: LibraryStore, readium: ReadiumService) { self.store = store; self.readium = readium }
 

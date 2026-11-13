@@ -118,7 +118,7 @@ struct LibraryView: View {
                 if selecting {
                     Button("Done") { finishSelection() }
                 } else {
-                    DownloadsToolbarButton(manager: downloads)
+                    DownloadsToolbarButton(manager: downloads, environment: environment)
                     Button("Select") { selectedIDs.removeAll(); selecting = true }.disabled(books.isEmpty || busy)
                     if busy { ProgressView() }
                     else { Button { importing = true } label: { Image(systemName: "plus") }.accessibilityLabel("Import Books") }

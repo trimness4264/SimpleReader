@@ -56,25 +56,25 @@ import ReadiumNavigator
         return nil
     }
 
-    func go(to locator: Locator, in navigator: EPUBReadingNavigator, isCurrent: () -> Bool) async throws {
+    func go(to locator: Locator, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws {
         try check(isCurrent)
         guard await navigator.go(to: locator) else { throw AppFailure("Couldn’t jump to the selected position.") }
         try await settle(isCurrent)
     }
 
-    func go(to link: Link, in navigator: EPUBReadingNavigator, isCurrent: () -> Bool) async throws {
+    func go(to link: Link, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws {
         try check(isCurrent)
         guard await navigator.go(to: link) else { throw AppFailure("Couldn’t open the chapter.") }
         try await settle(isCurrent)
     }
 
-    func go(toProgression value: Double, in navigator: EPUBReadingNavigator, isCurrent: () -> Bool) async throws -> Locator {
+    func go(toProgression value: Double, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws -> Locator {
         guard let locator = await publication.locate(progression: value) else { throw AppFailure("Couldn’t locate the position by percentage.") }
         try await go(to: locator, in: navigator, isCurrent: isCurrent)
         return adjusted(locator)
     }
 
-    func go(toPointer pointer: String, in navigator: EPUBReadingNavigator, isCurrent: () -> Bool) async throws -> Locator {
+    func go(toPointer pointer: String, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws -> Locator {
         try check(isCurrent)
         let locator = try await EPUBPositionBridge.locator(pointer: pointer, navigator: navigator,
             spine: spine, isCurrent: isCurrent)
@@ -82,7 +82,7 @@ import ReadiumNavigator
         return adjusted(locator)
     }
 
-    func restore(_ locator: Locator?, pointer: String?, in navigator: EPUBReadingNavigator, isCurrent: () -> Bool) async throws {
+    func restore(_ locator: Locator?, pointer: String?, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws {
         if let locator = locator {
             var loaded = false
             for _ in 0..<50 {
@@ -163,14 +163,14 @@ import ReadiumNavigator
         }
     }
 
-    private func settle(_ isCurrent: () -> Bool) async throws {
+    private func settle(_ isCurrent: @MainActor () -> Bool) async throws {
         try check(isCurrent)
         // Keep Readium's delayed location events out of user-movement persistence.
         try await Task.sleep(nanoseconds: 500_000_000)
         try check(isCurrent)
     }
 
-    private func check(_ isCurrent: () -> Bool) throws {
+    private func check(_ isCurrent: @MainActor () -> Bool) throws {
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
     }

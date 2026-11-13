@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 struct DownloadJob: Identifiable {
     enum State: String { case queued, downloading, importing, finished, failed, cancelled }
@@ -13,35 +14,79 @@ struct DownloadJob: Identifiable {
 }
 @MainActor final class DownloadManager: ObservableObject {
     typealias Transfer = (URLRequest, @escaping (Double) -> Void) async throws -> (URL, HTTPURLResponse)
+    struct Actions {
+        var canCancel = false
+        var canRetry = false
+        var bookID: UUID?
+    }
+
+    private struct TransferTask {
+        let attempt: UUID
+        let task: Task<Void, Never>
+    }
+
     @Published private(set) var jobs: [DownloadJob] = []
-    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var tasks: [UUID: TransferTask] = [:]
+    @Published private var libraryBookIDs: Set<UUID> = []
     private let http: HTTPClient
     private let importer: BookImportService
     private let transfer: Transfer
     init(http: HTTPClient, importer: BookImportService, transfer: Transfer? = nil) {
         self.http = http; self.importer = importer; self.transfer = transfer ?? http.download
+        importer.store.$books.map { Set($0.map(\.id)) }
+            .removeDuplicates()
+            .assign(to: &$libraryBookIDs)
     }
     var activeCount: Int { jobs.filter { [.queued, .downloading, .importing].contains($0.state) }.count }
     var failedCount: Int { jobs.filter { $0.state == .failed }.count }
-    var hasHistory: Bool { jobs.contains { [.finished, .cancelled].contains($0.state) } }
+    var hasHistory: Bool { jobs.contains(where: canClear) }
     func clearHistory() {
-        jobs.removeAll { [.finished, .cancelled].contains($0.state) }
+        jobs.removeAll(where: canClear)
+    }
+    private func canClear(_ job: DownloadJob) -> Bool {
+        [.finished, .cancelled].contains(job.state) && tasks[job.id] == nil
+    }
+    private func hasActiveDownload(for link: OPDSLink) -> Bool {
+        jobs.contains {
+            $0.link.url == link.url && $0.link.type == link.type &&
+                ($0.state == .queued || tasks[$0.id] != nil)
+        }
     }
     func enqueue(title: String, link: OPDSLink, credentials: ServerCredentials?) {
-        guard !jobs.contains(where: { $0.link.url == link.url && $0.link.type == link.type && [.queued, .downloading, .importing].contains($0.state) }) else { return }
+        guard !hasActiveDownload(for: link) else { return }
         jobs.append(DownloadJob(id: UUID(), title: title, link: link, credentials: credentials)); pump()
     }
     func job(for link: OPDSLink) -> DownloadJob? {
-        jobs.last { $0.link.url == link.url && $0.link.type == link.type }
+        let matching = jobs.filter { $0.link.url == link.url && $0.link.type == link.type }
+        return matching.last { $0.state == .queued || tasks[$0.id] != nil } ?? matching.last
+    }
+    func actions(for job: DownloadJob) -> Actions {
+        switch job.state {
+        case .queued, .downloading:
+            return Actions(canCancel: true)
+        case .failed, .cancelled:
+            return Actions(canRetry: !hasActiveDownload(for: job.link))
+        case .finished:
+            let bookID = job.bookID.flatMap { libraryBookIDs.contains($0) ? $0 : nil }
+            return Actions(canRetry: bookID == nil && !hasActiveDownload(for: job.link), bookID: bookID)
+        case .importing:
+            return Actions()
+        }
     }
     func cancel(_ id: UUID) {
-        guard let index = jobs.firstIndex(where: { $0.id == id }), [.queued, .downloading].contains(jobs[index].state) else { return }
-        jobs[index].state = .cancelled; tasks[id]?.cancel()
+        guard let index = jobs.firstIndex(where: { $0.id == id }), actions(for: jobs[index]).canCancel else { return }
+        jobs[index].state = .cancelled; tasks[id]?.task.cancel()
         pump()
     }
     func retry(_ id: UUID) {
-        guard let index = jobs.firstIndex(where: { $0.id == id }), [.failed, .cancelled].contains(jobs[index].state), tasks[id] == nil else { return }
-        jobs[index].state = .queued; jobs[index].error = nil; jobs[index].progress = 0; pump()
+        guard let index = jobs.firstIndex(where: { $0.id == id }), actions(for: jobs[index]).canRetry else { return }
+        update(id) { job in
+            job.state = .queued
+            job.error = nil
+            job.progress = 0
+            job.bookID = nil
+        }
+        pump()
     }
     private func update(_ id: UUID, _ change: (inout DownloadJob) -> Void) {
         if let index = jobs.firstIndex(where: { $0.id == id }) { change(&jobs[index]) }
@@ -49,17 +94,25 @@ struct DownloadJob: Identifiable {
     private func pump() {
         while tasks.count < 2, let job = jobs.first(where: { $0.state == .queued }) {
             update(job.id) { $0.state = .downloading }
-            tasks[job.id] = Task {
-                defer { tasks[job.id] = nil; pump() }
+            let attempt = UUID()
+            let task = Task {
+                defer {
+                    tasks[job.id] = nil
+                    objectWillChange.send()
+                    pump()
+                }
                 do {
                     var request = try http.request(job.link.url, credentials: job.credentials)
                     request.setValue(job.link.type, forHTTPHeaderField: "Accept")
                     request.timeoutInterval = 600
                     let manager = self
                     let (file, response) = try await transfer(request) { [weak manager] fraction in
-                        Task { @MainActor in manager?.update(job.id) {
-                            if $0.state == .downloading { $0.progress = min(max(fraction, 0), 1) }
-                        } }
+                        Task { @MainActor in
+                            guard let manager = manager, manager.tasks[job.id]?.attempt == attempt else { return }
+                            manager.update(job.id) {
+                                if $0.state == .downloading { $0.progress = min(max(fraction, 0), 1) }
+                            }
+                        }
                     }
                     defer { try? FileManager.default.removeItem(at: file) }
                     try Task.checkCancellation()
@@ -78,6 +131,7 @@ struct DownloadJob: Identifiable {
                     }
                 }
             }
+            tasks[job.id] = TransferTask(attempt: attempt, task: task)
         }
     }
 }

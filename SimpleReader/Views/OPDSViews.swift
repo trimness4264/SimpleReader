@@ -21,7 +21,7 @@ struct ServersView: View {
         }.navigationTitle("Online Library")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true)
+                DownloadsToolbarButton(manager: environment.downloads, environment: environment, alwaysVisible: true)
                 Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("Add Server")
             }
         }
@@ -135,7 +135,7 @@ struct CatalogView: View {
                 if model.catalog == nil && !model.loading { Button("Reload") { Task { await model.load() } } }
             }
         }.navigationTitle(model.catalog?.title ?? model.server.name).navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true) } }
+        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, environment: environment, alwaysVisible: true) } }
         .task { if model.catalog == nil { await model.load() } }.errorAlert($model.error)
     }
 }
@@ -175,7 +175,7 @@ struct EntryView: View {
                 if entry.downloads.isEmpty { Text("No EPUB or PDF downloads available. DRM-protected books are unsupported.").foregroundColor(.secondary) }
             }
         }.navigationTitle("Book Details").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, alwaysVisible: true) } }
+        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, environment: environment, alwaysVisible: true) } }
     }
 }
 
@@ -185,13 +185,12 @@ private struct EntryDownloadView: View {
     let model: CatalogModel
     let environment: AppEnvironment
     @ObservedObject private var manager: DownloadManager
-    @ObservedObject private var store: LibraryStore
     @State private var reading: Book?
     @State private var error: String?
 
     init(title: String, link: OPDSLink, model: CatalogModel, environment: AppEnvironment) {
         self.title = title; self.link = link; self.model = model; self.environment = environment
-        manager = environment.downloads; store = environment.store
+        manager = environment.downloads
     }
 
     private var job: DownloadJob? { manager.job(for: link) }
@@ -200,6 +199,7 @@ private struct EntryDownloadView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let job = job {
+                let actions = manager.actions(for: job)
                 switch job.state {
                 case .queued, .downloading:
                     HStack {
@@ -210,21 +210,23 @@ private struct EntryDownloadView: View {
                         }
                     }
                     if job.state == .downloading { ProgressView(value: job.progress).accessibilityLabel("\(format) download progress") }
-                    Button("Cancel Download", role: .destructive) { manager.cancel(job.id) }
+                    if actions.canCancel { Button("Cancel Download", role: .destructive) { manager.cancel(job.id) } }
                 case .importing:
                     ProgressView("Adding \(format) to library…")
                 case .finished:
-                    if let id = job.bookID, let book = store.book(id) {
+                    if let id = actions.bookID {
                         Label("\(format) added to library", systemImage: "checkmark.circle").foregroundColor(.secondary)
-                        Button { reading = book } label: { Label("Read \(format)", systemImage: "book") }
+                        Button { reading = environment.store.book(id) } label: { Label("Read \(format)", systemImage: "book") }
                     } else {
                         Text("\(format) removed from library").foregroundColor(.secondary)
-                        downloadButton
+                        if actions.canRetry { downloadButton }
                     }
                 case .failed, .cancelled:
                     Text(job.state == .failed ? "\(format) download failed" : "\(format) download canceled").foregroundColor(.secondary)
                     if let message = job.error { Text(message).font(.caption).foregroundColor(.red) }
-                    Button { manager.retry(job.id) } label: { Label("Download \(format) Again", systemImage: "arrow.clockwise") }
+                    if actions.canRetry {
+                        Button { manager.retry(job.id) } label: { Label("Download \(format) Again", systemImage: "arrow.clockwise") }
+                    }
                 }
             } else { downloadButton }
         }

@@ -16,6 +16,7 @@
 "About Simple Reader" = "关于 Simple Reader";
 "Add Server" = "添加服务器";
 "Added to library" = "已加入书库";
+"Removed from library" = "已从书库移除";
 "Adding %@ to library…" = "%@ 正在加入书库…";
 "Adding to library" = "正在加入书库";
 "Adjust to jump to the selected position" = "调整后跳转到所选位置";

@@ -127,9 +127,9 @@ struct ReaderView: View {
             let percentage = Int((prompt.remote.percentage ?? 0)*100)
             switch prompt.kind {
             case .conflict:
-                return Alert(title: Text("Choose a Reading Position"), message: Text("On this device: \(Int(session.progression*100))%. On the server: \(percentage)%. Both positions have changed."), primaryButton: .default(Text("Use Server Position")) { session.prompt = nil; Task { await session.receive(prompt.remote) } }, secondaryButton: .default(Text("Keep and Upload Local Position")) { session.prompt = nil; Task { await session.synchronize(preferLocal: true) } })
+                return Alert(title: Text("Choose a Reading Position"), message: Text("On this device: \(Int(session.progression*100))%. On the server: \(percentage)%. Both positions have changed."), primaryButton: .default(Text("Use Server Position")) { session.prompt = nil; Task { await session.receive(prompt.remote, revision: prompt.revision) } }, secondaryButton: .default(Text("Keep and Upload Local Position")) { session.prompt = nil; Task { await session.synchronize(preferLocal: true) } })
             case .approximate:
-                return Alert(title: Text("Couldn’t Locate the Exact Server Position"), message: Text("Jump to approximately \(percentage)%? Different readers may land on different paragraphs."), primaryButton: .default(Text("Jump to Approximate Position")) { session.prompt = nil; Task { await session.receive(prompt.remote, approximate: true) } }, secondaryButton: .cancel(Text("Keep Local Position")) { session.prompt = nil })
+                return Alert(title: Text("Couldn’t Locate the Exact Server Position"), message: Text("Jump to approximately \(percentage)%? Different readers may land on different paragraphs."), primaryButton: .default(Text("Jump to Approximate Position")) { session.prompt = nil; Task { await session.receive(prompt.remote, approximate: true, revision: prompt.revision) } }, secondaryButton: .cancel(Text("Keep Local Position")) { session.prompt = nil })
             }
         }
         .errorAlert($session.error)
