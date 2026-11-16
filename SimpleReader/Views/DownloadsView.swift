@@ -64,7 +64,7 @@ struct DownloadsToolbarButton: View {
                 .accessibilityLabel("Downloads")
                 .accessibilityValue("\(manager.activeCount) active, \(manager.failedCount) failed")
                 .sheet(isPresented: $presented) {
-                    NavigationView { DownloadsView(manager: manager, environment: environment) }.navigationViewStyle(.stack)
+                    NavigationStack { DownloadsView(manager: manager, environment: environment) }
                 }
             }
         }

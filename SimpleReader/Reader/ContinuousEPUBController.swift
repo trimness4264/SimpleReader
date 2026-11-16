@@ -70,6 +70,18 @@ extension EPUBReadingNavigator {
         applyBackground()
     }
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: ContinuousEPUBController, _: UITraitCollection) in
+            controller.updateSettings(controller.settings)
+        }
+    }
+
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        updateSettings(settings)
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updatingLayout = true
@@ -114,11 +126,6 @@ extension EPUBReadingNavigator {
         self.settings = settings
         applyBackground()
         for webView in webViews.values { applyStyle(to: webView) }
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle { updateSettings(settings) }
     }
 
     private var dark: Bool { settings.theme.isDark ?? (traitCollection.userInterfaceStyle == .dark) }

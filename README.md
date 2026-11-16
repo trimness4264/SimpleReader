@@ -1,6 +1,6 @@
 # Simple Reader
 
-Simple Reader 是一款适用于 iPhone 和 iPad 的原生 EPUB/PDF 阅读器，支持 iOS 15 及以上版本。
+Simple Reader 是一款适用于 iPhone 和 iPad 的原生 EPUB/PDF 阅读器，支持 iOS / iPadOS 17 及以上版本。
 
 应用使用 SwiftUI、Core Data、Readium Swift 3.8.0 和 PDFKit 构建。
 

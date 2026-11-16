@@ -134,8 +134,8 @@ struct LibraryView: View {
                 .padding().background(.regularMaterial)
             }
         }
-        .onChange(of: search) { _ in selectedIDs.removeAll() }
-        .onChange(of: store.books.map(\.id)) { ids in
+        .onChange(of: search) { selectedIDs.removeAll() }
+        .onChange(of: store.books.map(\.id)) { _, ids in
             selectedIDs.formIntersection(Set(ids))
             if books.isEmpty { finishSelection() }
             if let book = importedBook, !ids.contains(book.id) { importedBook = nil; importMessage = nil }
@@ -150,7 +150,6 @@ struct LibraryView: View {
         .alert("Delete selected books (\(deleting.count))?", isPresented: Binding(get: { !deleting.isEmpty }, set: { if !$0 { deleting = [] } }), presenting: deleting) { booksToDelete in
             Button("Cancel", role: .cancel) { deleting = [] }
             Button("Delete", role: .destructive) {
-                // Use the presented value: iOS 15 can clear the binding before this action runs.
                 do {
                     try store.delete(booksToDelete)
                     finishSelection()

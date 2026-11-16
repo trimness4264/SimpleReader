@@ -67,21 +67,12 @@ private final class ReaderContainerView: UIView {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.clipsToBounds = true
-        if #available(iOS 17.0, *) {
-            registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: ReaderContainerController, _: UITraitCollection) in
-                controller.onAppearanceChange?()
-            }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: ReaderContainerController, _: UITraitCollection) in
+            controller.onAppearanceChange?()
         }
         pageTurnPan.maximumNumberOfTouches = 1
         pageTurnPan.delegate = self
         view.addGestureRecognizer(pageTurnPan)
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        if #unavailable(iOS 17.0), previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
-            onAppearanceChange?()
-        }
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {

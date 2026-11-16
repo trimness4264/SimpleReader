@@ -18,10 +18,10 @@ struct RootView: View {
                 sharedImports.receive(url)
             }
             .task { _ = sharedImports.recoverInbox() }
-            .onChange(of: scenePhase) { phase in
+            .onChange(of: scenePhase) { _, phase in
                 if phase == .active { sharedImports.recoverInbox() }
             }
-            .onChange(of: sharedImports.pendingCount) { count in
+            .onChange(of: sharedImports.pendingCount) { _, count in
                 if count > 0 { selectedTab = 0 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -38,27 +38,20 @@ struct RootView: View {
     }
     @ViewBuilder private var content: some View {
         if sizeClass == .regular {
-            if #available(iOS 16.0, *) {
-                NavigationSplitView {
-                    sidebar
-                } detail: {
-                    NavigationStack { selectedContent }
-                }
-                .navigationSplitViewStyle(.balanced)
-                // iPadOS 17 can retain pushed destinations in the split view itself.
-                // Reset the whole navigation container when switching sidebar sections.
-                .id(selectedTab)
-            } else {
-                NavigationView {
-                    sidebar
-                    selectedContent.id(selectedTab)
-                }.navigationViewStyle(.columns)
+            NavigationSplitView {
+                sidebar
+            } detail: {
+                NavigationStack { selectedContent }
             }
+            .navigationSplitViewStyle(.balanced)
+            // iPadOS 17 can retain pushed destinations in the split view itself.
+            // Reset the whole navigation container when switching sidebar sections.
+            .id(selectedTab)
         } else {
             TabView(selection: $selectedTab) {
-                NavigationView { LibraryView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("Library", systemImage: "books.vertical") }.tag(0)
-                NavigationView { ServersView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("Online Library", systemImage: "network") }.tag(1)
-                NavigationView { SettingsView(environment: environment) }.navigationViewStyle(.stack).tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
+                NavigationStack { LibraryView(environment: environment) }.tabItem { Label("Library", systemImage: "books.vertical") }.tag(0)
+                NavigationStack { ServersView(environment: environment) }.tabItem { Label("Online Library", systemImage: "network") }.tag(1)
+                NavigationStack { SettingsView(environment: environment) }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
             }
         }
     }

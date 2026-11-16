@@ -110,7 +110,7 @@ struct ReaderView: View {
             showRestorationProgress = true
         }
         .task { await session.load() }
-        .onChange(of: phase) { value in
+        .onChange(of: phase) { _, value in
             switch value {
             case .inactive: session.resignActive()
             case .background: Task { await session.background() }
@@ -248,14 +248,12 @@ struct ReaderView: View {
         }.padding(.horizontal, 16).padding(.top, 8).background(.regularMaterial)
     }
 
-    @ViewBuilder private var preferencesPanel: some View {
-        if #available(iOS 16.0, *) {
-            ReaderPreferencesView(store: store, supportsScrolling: session.supportsScrolling, onChange: { session.updatePreferences() })
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        } else {
+    private var preferencesPanel: some View {
+        NavigationStack {
             ReaderPreferencesView(store: store, supportsScrolling: session.supportsScrolling, onChange: { session.updatePreferences() })
         }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 private struct ReaderProgressSlider: View {
@@ -312,7 +310,7 @@ struct PDFPageJumpView: View {
     @FocusState private var pageInputFocused: Bool
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section {
                     HStack {
@@ -324,7 +322,7 @@ struct PDFPageJumpView: View {
                             .accessibilityLabel("Go to Page")
                             .accessibilityIdentifier("pdf.pageInput")
                             .onSubmit { jump() }
-                            .onChange(of: pageInput) { _ in pageInputError = nil }
+                            .onChange(of: pageInput) { pageInputError = nil }
                             .disabled(session.isNavigating)
                     }
                 } footer: {
@@ -341,7 +339,7 @@ struct PDFPageJumpView: View {
                 }
             }
             .task { pageInputFocused = true }
-        }.navigationViewStyle(.stack)
+        }
     }
 
     private func jump() {
@@ -370,7 +368,7 @@ private struct ReaderContentsView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollViewReader { proxy in
                 List {
                     if !locating && !filteredContents.contains(where: { $0.id == session.currentContentsID }) { currentPosition }
@@ -410,13 +408,13 @@ private struct ReaderContentsView: View {
                     guard !Task.isCancelled else { return }
                     locating = false
                 }
-                .onChange(of: locating) { value in
+                .onChange(of: locating) { _, value in
                     if !value { proxy.scrollTo(positionID, anchor: .center) }
                 }
             }
             .navigationTitle("Contents").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
-        }.navigationViewStyle(.stack)
+        }
     }
 
     private var currentPosition: some View {
@@ -441,45 +439,45 @@ struct ReaderPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
     var body: some View {
-        NavigationView {
-            Form {
-                if supportsScrolling {
-                    Section(header: Text("Reading Mode")) {
-                        Picker("Reading Mode", selection: Binding(get: { store.settings.reader.layout }, set: { value in save { $0.layout = value } })) {
-                            Text("Paginated").tag(ReadingLayout.paginated)
-                            Text("Continuous Scrolling").tag(ReadingLayout.scroll)
-                        }.pickerStyle(.segmented)
+        Form {
+            if supportsScrolling {
+                Section(header: Text("Reading Mode")) {
+                    Picker("Reading Mode", selection: Binding(get: { store.settings.reader.layout }, set: { value in save { $0.layout = value } })) {
+                        Text("Paginated").tag(ReadingLayout.paginated)
+                        Text("Continuous Scrolling").tag(ReadingLayout.scroll)
+                    }.pickerStyle(.segmented)
+                }
+                Section(header: Text("Typography")) {
+                    Picker("Font", selection: Binding(get: { store.settings.reader.font }, set: { value in save { $0.font = value } })) {
+                        Text("Book Serif").tag(ReaderFont.serif)
+                        Text("System Sans Serif").tag(ReaderFont.system)
                     }
-                    Section(header: Text("Typography")) {
-                        Picker("Font", selection: Binding(get: { store.settings.reader.font }, set: { value in save { $0.font = value } })) {
-                            Text("Book Serif").tag(ReaderFont.serif)
-                            Text("System Sans Serif").tag(ReaderFont.system)
-                        }
-                        VStack(alignment: .leading) {
-                            Text("Font size: \(Int(store.settings.reader.fontSize))%")
-                            Slider(value: Binding(get: { store.settings.reader.fontSize }, set: { value in save { $0.fontSize = value } }), in: 80...200, step: 10)
-                                .accessibilityLabel("Font size")
-                        }
-                        VStack(alignment: .leading) {
-                            Text("Line spacing: \(store.settings.reader.lineHeight, specifier: "%.2f")×")
-                            Slider(value: Binding(get: { store.settings.reader.lineHeight }, set: { value in save { $0.lineHeight = value } }), in: 1.2...2.0, step: 0.05)
-                                .accessibilityLabel("Line spacing")
-                        }
-                        VStack(alignment: .leading) {
-                            Text("Page margins: \(store.settings.reader.pageMargins, specifier: "%.2f")×")
-                            Slider(value: Binding(get: { store.settings.reader.pageMargins }, set: { value in save { $0.pageMargins = value } }), in: 0.5...2.0, step: 0.25)
-                                .accessibilityLabel("Page margins")
-                        }
+                    VStack(alignment: .leading) {
+                        Text("Font size: \(Int(store.settings.reader.fontSize))%")
+                        Slider(value: Binding(get: { store.settings.reader.fontSize }, set: { value in save { $0.fontSize = value } }), in: 80...200, step: 10)
+                            .accessibilityLabel("Font size")
+                    }
+                    VStack(alignment: .leading) {
+                        Text("Line spacing: \(store.settings.reader.lineHeight, specifier: "%.2f")×")
+                        Slider(value: Binding(get: { store.settings.reader.lineHeight }, set: { value in save { $0.lineHeight = value } }), in: 1.2...2.0, step: 0.05)
+                            .accessibilityLabel("Line spacing")
+                    }
+                    VStack(alignment: .leading) {
+                        Text("Page margins: \(store.settings.reader.pageMargins, specifier: "%.2f")×")
+                        Slider(value: Binding(get: { store.settings.reader.pageMargins }, set: { value in save { $0.pageMargins = value } }), in: 0.5...2.0, step: 0.25)
+                            .accessibilityLabel("Page margins")
                     }
                 }
-                Picker("Theme", selection: Binding(get: { store.settings.reader.theme }, set: { value in save { $0.theme = value } })) {
-                    Text("System").tag(ReaderTheme.system)
-                    Text("Light").tag(ReaderTheme.light)
-                    Text("Dark").tag(ReaderTheme.dark)
-                }
-            }.navigationTitle("Reading Settings").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
-        }.navigationViewStyle(.stack).errorAlert($error)
+            }
+            Picker("Theme", selection: Binding(get: { store.settings.reader.theme }, set: { value in save { $0.theme = value } })) {
+                Text("System").tag(ReaderTheme.system)
+                Text("Light").tag(ReaderTheme.light)
+                Text("Dark").tag(ReaderTheme.dark)
+            }
+        }
+        .navigationTitle("Reading Settings").navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
+        .errorAlert($error)
     }
     private func save(_ change: (inout ReaderSettings) -> Void) {
         do { var settings = store.settings; change(&settings.reader); try store.saveSettings(settings); onChange() } catch { self.error = error.localizedDescription }

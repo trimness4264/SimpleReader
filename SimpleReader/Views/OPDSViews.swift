@@ -50,7 +50,7 @@ struct ServerEditor: View {
         _username = State(initialValue: server?.username ?? "")
     }
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 TextField("Name", text: $name)
                 TextField("OPDS Address", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -64,7 +64,7 @@ struct ServerEditor: View {
                 ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) { Button("Save") { save() }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || address.isEmpty) }
             }
-        }.navigationViewStyle(.stack).task { if let server = server { do { password = try accounts.password(for: server) } catch { self.error = error.localizedDescription } } }.errorAlert($error)
+        }.task { if let server = server { do { password = try accounts.password(for: server) } catch { self.error = error.localizedDescription } } }.errorAlert($error)
     }
     private func save() {
         do {

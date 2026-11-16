@@ -30,7 +30,7 @@ private struct AboutView: View {
     private var appName: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Simple Reader" }
     private var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? String(localized: "Unknown") }
     private var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? String(localized: "Unknown") }
-    private var minimumOS: String { Bundle.main.object(forInfoDictionaryKey: "MinimumOSVersion") as? String ?? "15.0" }
+    private var minimumOS: String { Bundle.main.object(forInfoDictionaryKey: "MinimumOSVersion") as? String ?? "17.0" }
 
     var body: some View {
         List {
@@ -77,7 +77,7 @@ private struct AboutView: View {
 
 #if DEBUG
 private struct AboutView_Previews: PreviewProvider {
-    static var previews: some View { NavigationView { AboutView() } }
+    static var previews: some View { NavigationStack { AboutView() } }
 }
 #endif
 
@@ -98,7 +98,7 @@ private struct SyncEditor: View {
         _enabled = State(initialValue: sync.enabled); _filenameMatching = State(initialValue: sync.filenameMatching)
     }
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 TextField("Sync Server Address", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("Existing Account Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -113,7 +113,7 @@ private struct SyncEditor: View {
                 ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) { Button("Save") { save() }.disabled(checking) }
             }
-        }.navigationViewStyle(.stack).task { do { password = try environment.accounts.syncPassword() } catch { self.error = error.localizedDescription } }.errorAlert($error)
+        }.task { do { password = try environment.accounts.syncPassword() } catch { self.error = error.localizedDescription } }.errorAlert($error)
     }
     private func verify() async {
         checking = true; defer { checking = false }
