@@ -40,7 +40,6 @@
 		000000000000000000000044 /* SimpleReader/Resources/Licenses in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001A /* SimpleReader/Resources/Licenses */; };
 		000000000000000000000045 /* SimpleReader/Resources/THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001B /* SimpleReader/Resources/THIRD_PARTY_NOTICES.md */; };
 		000000000000000000000061 /* SimpleReader/Resources/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000060 /* SimpleReader/Resources/Assets.xcassets */; };
-		000000000000000000000063 /* SimpleReader/Resources/Fonts in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000062 /* SimpleReader/Resources/Fonts */; };
 		000000000000000000000065 /* SimpleReader/Reader/ContinuousEPUBController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000064 /* SimpleReader/Reader/ContinuousEPUBController.swift */; };
 		000000000000000000000067 /* SimpleReader/Reader/ContinuousPublicationServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000066 /* SimpleReader/Reader/ContinuousPublicationServer.swift */; };
 		A7C180000000000000000001 /* SimpleReader/Reader/EPUBReadingPosition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000002 /* SimpleReader/Reader/EPUBReadingPosition.swift */; };
@@ -107,7 +106,6 @@
 		00000000000000000000001D /* SimpleReader/Resources/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = SimpleReader/Resources/Info.plist; sourceTree = "<group>"; };
 		00000000000000000000001E /* SimpleReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = SimpleReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000060 /* SimpleReader/Resources/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = SimpleReader/Resources/Assets.xcassets; sourceTree = "<group>"; };
-		000000000000000000000062 /* SimpleReader/Resources/Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = SimpleReader/Resources/Fonts; sourceTree = "<group>"; };
 		000000000000000000000064 /* SimpleReader/Reader/ContinuousEPUBController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousEPUBController.swift; sourceTree = "<group>"; };
 		000000000000000000000066 /* SimpleReader/Reader/ContinuousPublicationServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousPublicationServer.swift; sourceTree = "<group>"; };
 		A7C180000000000000000002 /* SimpleReader/Reader/EPUBReadingPosition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/EPUBReadingPosition.swift; sourceTree = "<group>"; };
@@ -195,7 +193,6 @@
 				000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */,
 				C11000000000000000000003 /* Localizable.strings */,
 				C11000000000000000000004 /* InfoPlist.strings */,
-				000000000000000000000062 /* SimpleReader/Resources/Fonts */,
 				000000000000000000000060 /* SimpleReader/Resources/Assets.xcassets */,
 				000000000000000000000019 /* SimpleReader/Resources/LICENSE.txt */,
 				00000000000000000000001A /* SimpleReader/Resources/Licenses */,
@@ -236,6 +233,7 @@
 				00000000000000000000003D /* Sources */,
 				000000000000000000000041 /* Frameworks */,
 				000000000000000000000046 /* Resources */,
+				000000000000000000000063 /* Bundle Reader Fonts */,
 			);
 			buildRules = (
 			);
@@ -308,7 +306,6 @@
 				000000000000000000000042 /* SimpleReader/Resources/EPUBPositionBridge.js in Resources */,
 				C11000000000000000000001 /* Localizable.strings in Resources */,
 				C11000000000000000000002 /* InfoPlist.strings in Resources */,
-				000000000000000000000063 /* SimpleReader/Resources/Fonts in Resources */,
 				000000000000000000000061 /* SimpleReader/Resources/Assets.xcassets in Resources */,
 				000000000000000000000043 /* SimpleReader/Resources/LICENSE.txt in Resources */,
 				000000000000000000000044 /* SimpleReader/Resources/Licenses in Resources */,
@@ -325,6 +322,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		000000000000000000000063 /* Bundle Reader Fonts */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ("$(SRCROOT)/Scripts/bundle_reader_fonts.sh");
+			name = "Bundle Reader Fonts";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Fonts/LXGWWenKai-Regular.ttf",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Fonts/SourceSerif4-Regular.ttf",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Fonts/SourceSerif4-Bold.ttf",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Fonts/SourceSerif4-It.ttf",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Fonts/SourceSerif4-BoldIt.ttf",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/bin/sh \"$SCRIPT_INPUT_FILE_0\" \"$DERIVED_FILE_DIR/ReaderFontCache\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Fonts\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXVariantGroup section */
 		C11000000000000000000003 /* Localizable.strings */ = {isa = PBXVariantGroup; children = (C11000000000000000000005 /* en */, C11000000000000000000006 /* zh-Hans */); name = Localizable.strings; sourceTree = "<group>"; };
@@ -407,7 +424,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"DEBUG=1",
 					"$(inherited)",
@@ -435,7 +452,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = SimpleReader/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.leo.SimpleReader;

@@ -1,6 +1,8 @@
 # Bundled reader fonts
 
-Downloaded from the official upstream repositories on 2026-10-06. All binaries
+The app build downloads these fonts from the official upstream repositories,
+verifies their SHA-256 checksums, and caches them in the build directory.
+The first build with an empty cache requires internet access. All binaries
 are unmodified and licensed under SIL OFL 1.1. Full copyright and license texts
 are bundled in `../Licenses/LXGWWenKai.txt` and `../Licenses/SourceSerif4.txt`.
 

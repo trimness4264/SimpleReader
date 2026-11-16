@@ -37,7 +37,8 @@ Bundled fonts: the Text optical size, Regular, Bold, It and BoldIt TTF files.
 Copyright 2014-2023 Adobe, with Reserved Font Name "Source".
 License: SIL Open Font License 1.1; see Licenses/SourceSerif4.txt.
 The font binaries are redistributed unmodified. Download URLs and SHA-256
-checksums for both font families are recorded in Fonts/README.md.
+checksums for both font families are recorded in Scripts/bundle_reader_fonts.sh
+in the source repository.
 
 ## KOReader protocol
 https://github.com/koreader/koreader
