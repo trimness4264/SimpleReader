@@ -475,13 +475,17 @@ struct SyncPrompt: Identifiable {
             await navigate(to: .progression(value))
         }
     }
-    func jump(toPage page: Int) async {
+    @discardableResult
+    func jump(toPage page: Int, onFailure: ((Error) -> Void)? = nil) async -> Bool {
         guard let count = pdfPageCount, (1...count).contains(page) else {
-            error = String(localized: "Page number outside this book’s range.")
-            return
+            let failure = AppFailure("Page number outside this book’s range.")
+            if let onFailure { onFailure(failure) }
+            else { error = failure.localizedDescription }
+            return false
         }
-        guard page != currentPDFPage else { return }
-        await navigate(to: .page(page - 1))
+        guard page != currentPDFPage else { return true }
+        let succeeded = await navigate(to: .page(page - 1), onFailure: onFailure)
+        return succeeded && currentPDFPage == page
     }
     func returnToPreviousPosition() async {
         guard let previousPosition = positions.previous else { return }
@@ -518,11 +522,12 @@ struct SyncPrompt: Identifiable {
         throw AppFailure("Couldn’t jump to the selected position.")
     }
 
+    @discardableResult
     private func navigate(
         _ operation: @MainActor (@MainActor () -> Bool) async throws -> Void,
         onFailure: (Error) -> Void
-    ) async {
-        guard ready, isActive, !closed, positions.activity == .idle, !container.isTurningPage else { return }
+    ) async -> Bool {
+        guard ready, isActive, !closed, positions.activity == .idle, !container.isTurningPage else { return false }
         savePendingLocation()
         let navigator = activeEPUB
         let pdf = pdf
@@ -546,27 +551,30 @@ struct SyncPrompt: Identifiable {
                 positions.refineOrigin(origin)
             }
             try await operation(isCurrent)
+            return true
         } catch {
-            guard ownsNavigation() else { return }
+            guard ownsNavigation() else { return false }
             if isCurrent(), !(error is CancellationError) {
                 do {
                     try await move(to: .checkpoint(origin), isCurrent: isCurrent)
                     guard isCurrent() else { throw CancellationError() }
                     progression = origin.position?.progression ?? progression
                     onFailure(error)
-                    return
+                    return false
                 } catch {
-                    guard ownsNavigation() else { return }
+                    guard ownsNavigation() else { return false }
                 }
             }
             positions.protect(origin)
             continuous?.cancelNavigation()
             scheduleRestoration()
+            return false
         }
     }
 
-    private func navigate(to target: NavigationTarget, returning: Bool = false) async {
-        await navigate { isCurrent in
+    @discardableResult
+    private func navigate(to target: NavigationTarget, returning: Bool = false, onFailure: ((Error) -> Void)? = nil) async -> Bool {
+        let succeeded = await navigate { isCurrent in
             let navigator = activeEPUB
             let pdfPosition = try await move(to: target, isCurrent: isCurrent)
             guard isCurrent() else { throw CancellationError() }
@@ -587,9 +595,11 @@ struct SyncPrompt: Identifiable {
                 canReturnToPreviousPosition = positions.previous != nil
             }
         } onFailure: { error in
-            self.error = error.localizedDescription
+            if let onFailure { onFailure(error) }
+            else { self.error = error.localizedDescription }
         }
         if !closed, positions.activity == .idle { await refreshContentsPosition() }
+        return succeeded
     }
     func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false, applyRemote: Bool = true) async {
         guard ready, !busySync, !isNavigating, (!isRestoring || !applyRemote), !container.isTurningPage, prompt == nil else { return }

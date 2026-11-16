@@ -5,8 +5,6 @@
 "%@ is already in your library." = "%@ is already in your library.";
 "%@ queued" = "%@ queued";
 "%@ removed from library" = "%@ removed from library";
-"%@, go to page" = "%@, go to page";
-"%@, show reading controls" = "%@, show reading controls";
 "%lld active, %lld failed" = "%1$lld active, %2$lld failed";
 "%lld selected" = "%lld selected";
 "%lld%% read" = "%lld%% read";
@@ -19,7 +17,6 @@
 "Removed from library" = "Removed from library";
 "Adding %@ to library…" = "Adding %@ to library…";
 "Adding to library" = "Adding to library";
-"Adjust to jump to the selected position" = "Adjust to jump to the selected position";
 "All Books" = "All Books";
 "App Information" = "App Information";
 "App License" = "App License";
@@ -39,6 +36,7 @@
 "Canceled" = "Canceled";
 "Chapter" = "Chapter";
 "Chapter content isn’t visible yet. Try again." = "Chapter content isn’t visible yet. Try again.";
+"Choose Chapter" = "Choose Chapter";
 "Choose a Reading Position" = "Choose a Reading Position";
 "Choose a reading position to sync" = "Choose a reading position to sync";
 "Choose an EPUB or PDF file." = "Choose an EPUB or PDF file.";
@@ -86,6 +84,7 @@
 "Delete Selected (%lld)" = "Delete Selected (%lld)";
 "Delete selected books (%lld)?" = "Delete selected books (%lld)?";
 "Deselect All" = "Deselect All";
+"Destination" = "Destination";
 "Devices" = "Devices";
 "Dismiss" = "Dismiss";
 "Done" = "Done";
@@ -115,6 +114,7 @@
 "Font size: %lld%%" = "Font size: %lld%%";
 "Go" = "Go";
 "Go to Page" = "Go to Page";
+"Go to Position" = "Go to Position";
 "Hide Reading Controls" = "Hide Reading Controls";
 "Import Books" = "Import Books";
 "Import an EPUB or PDF, or download a book from an online library." = "Import an EPUB or PDF, or download a book from an online library.";
@@ -165,6 +165,7 @@
 "Open Source" = "Open Source";
 "Open-Source Licenses" = "Open-Source Licenses";
 "Opening…" = "Opening…";
+"Opens the position jump panel" = "Opens the position jump panel";
 "Page" = "Page";
 "Page %lld" = "Page %lld";
 "Page %lld of %lld" = "Page %1$lld of %2$lld";
@@ -173,6 +174,7 @@
 "Page number outside this book’s range." = "Page number outside this book’s range.";
 "Paginated" = "Paginated";
 "Password" = "Password";
+"Percentage" = "Percentage";
 "Previous page" = "Previous page";
 "Public servers require HTTPS. HTTP is available only on local networks." = "Public servers require HTTPS. HTTP is available only on local networks.";
 "Queued" = "Queued";

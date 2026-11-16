@@ -32,7 +32,7 @@ struct ReaderView: View {
     @State private var showRestorationProgress = false
     @State private var showContents = false
     @State private var showPreferences = false
-    @State private var showPageJump = false
+    @State private var showProgressJump = false
     @State private var closing = false
     @State private var showSyncStatus = false
     @AppStorage("reader.showPageButtons") private var showPageButtons = false
@@ -119,9 +119,18 @@ struct ReaderView: View {
             }
         }
         .sheet(isPresented: $showContents) {
-            ReaderContentsView(session: session)
+            NavigationStack { ReaderContentsView(session: session, mode: .browse) }
         }
-        .sheet(isPresented: $showPageJump) { PDFPageJumpView(session: session) }
+        .sheet(isPresented: $showProgressJump) {
+            Group {
+                if session.pdfPageCount != nil {
+                    PDFPageJumpView(session: session)
+                } else {
+                    EPUBProgressJumpView(session: session)
+                }
+            }
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showPreferences) { preferencesPanel }
         .alert(item: $session.prompt) { prompt in
             let percentage = Int((prompt.remote.percentage ?? 0)*100)
@@ -158,16 +167,14 @@ struct ReaderView: View {
                         .font(.caption).padding(12).background(.regularMaterial, in: Capsule())
                 }
             }
-            if session.controlsVisible {
-                bottomControls.transition(controlsTransition(verticalOffset: 8))
-            } else if showProgress {
-                Button { session.toggleControls() } label: {
-                    Text(session.progressLabel).font(.caption.monospacedDigit())
-                        .padding(.horizontal, 12).frame(minHeight: 44).background(.regularMaterial, in: Capsule())
+            Group {
+                if session.controlsVisible {
+                    bottomControls.transition(controlsTransition(verticalOffset: 8))
+                } else if showProgress {
+                    progressJumpButton(compact: true).transition(.opacity)
                 }
-                .accessibilityLabel("\(session.progressLabel), show reading controls")
-                .transition(.opacity)
             }
+            .disabled(!session.ready || session.isNavigating || session.isRestoring)
         }
         .background {
             if session.controlsVisible {
@@ -213,39 +220,50 @@ struct ReaderView: View {
     }
 
     private var bottomControls: some View {
-        VStack(spacing: 0) {
-            ReaderProgressSlider(session: session)
-            HStack(spacing: 12) {
-                Button { showContents = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Contents")
-                    .disabled(!session.ready || session.isNavigating)
-                Spacer()
-                if showPageButtons && !session.isScrolling {
-                    Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("Previous page")
-                }
-                if session.pdfPageCount != nil {
-                    Button { showPageJump = true } label: {
-                        HStack(spacing: 6) {
-                            Text(session.progressLabel).font(.subheadline.monospacedDigit())
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }.frame(minHeight: 44)
-                    }.accessibilityLabel("\(session.progressLabel), go to page")
-                } else {
-                    Text(session.progressLabel).font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
-                }
-                if showPageButtons && !session.isScrolling {
-                    Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }.accessibilityLabel("Next page")
-                }
-                Spacer()
-                if isEPUB {
-                    Button { showPreferences = true } label: { Image(systemName: "textformat.size").frame(width: 44, height: 44) }
-                        .accessibilityLabel("Reading Settings").disabled(!session.ready || session.isNavigating)
-                } else {
-                    Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
+        HStack(spacing: 12) {
+            Button { showContents = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
+                .accessibilityLabel("Contents")
+            Spacer(minLength: 0)
+            if showPageButtons && !session.isScrolling {
+                Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("Previous page")
+            }
+            progressJumpButton(compact: false).layoutPriority(1)
+            if showPageButtons && !session.isScrolling {
+                Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }.accessibilityLabel("Next page")
+            }
+            Spacer(minLength: 0)
+            if isEPUB {
+                Button { showPreferences = true } label: { Image(systemName: "textformat.size").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Reading Settings")
+            } else {
+                Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, 16).padding(.top, 8).background(.regularMaterial)
+    }
+
+    private func progressJumpButton(compact: Bool) -> some View {
+        Button { showProgressJump = true } label: {
+            HStack(spacing: 6) {
+                Text(session.progressLabel)
+                    .font((compact ? Font.caption : .subheadline).monospacedDigit())
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Image(systemName: "chevron.up").font(.caption2)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, compact ? 12 : 0)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+            .background {
+                if compact {
+                    Capsule().fill(.regularMaterial)
                 }
             }
-            .disabled(!session.ready || session.isNavigating || session.isRestoring)
-        }.padding(.horizontal, 16).padding(.top, 8).background(.regularMaterial)
+        }
+        .accessibilityLabel("Reading progress")
+        .accessibilityValue(session.progressLabel)
+        .accessibilityHint("Opens the position jump panel")
     }
 
     private var preferencesPanel: some View {
@@ -256,49 +274,72 @@ struct ReaderView: View {
         .presentationDragIndicator(.visible)
     }
 }
-private struct ReaderProgressSlider: View {
-    @ObservedObject var session: ReaderSession
-    @State private var draftProgression: Double?
+private struct EPUBProgressJumpView: View {
+    private enum Target {
+        case progression(Double)
+        case chapter(ContentsItem)
+    }
 
-    private var sliderProgression: Double {
-        if let count = session.pdfPageCount, let page = session.currentPDFPage {
-            return count > 1 ? Double(page - 1) / Double(count - 1) : 0
-        }
+    @ObservedObject var session: ReaderSession
+    @Environment(\.dismiss) private var dismiss
+    @State private var target: Target?
+
+    private let percentageFormat = FloatingPointFormatStyle<Double>.Percent().precision(.fractionLength(0...2))
+
+    private var progression: Double {
+        if case .progression(let value) = target { return value }
         return min(max(session.progression, 0), 1)
     }
-    private var displayedProgression: Double { draftProgression ?? sliderProgression }
-    private var previewLabel: String {
-        guard draftProgression != nil else { return session.progressLabel }
-        if let count = session.pdfPageCount {
-            let page = Int((displayedProgression * Double(max(0, count - 1))).rounded()) + 1
-            return String(localized: "Page \(page) of \(count)")
+
+    private var destinationLabel: String {
+        switch target {
+        case .progression(let value): value.formatted(percentageFormat)
+        case .chapter(let item): item.title
+        case nil: String(localized: "Not selected")
         }
-        return "\(Int((displayedProgression * 100).rounded()))%"
     }
 
     var body: some View {
-            Slider(value: Binding(get: { displayedProgression }, set: { draftProgression = $0 }), in: 0...1) { editing in
-                if editing {
-                    draftProgression = sliderProgression
-                } else if let target = draftProgression {
-                    Task {
-                        await session.jump(toProgression: target)
-                        draftProgression = nil
+        NavigationStack {
+            Form {
+                Section {
+                    LabeledContent("Current Position", value: session.progressLabel)
+                    LabeledContent("Destination", value: destinationLabel)
+                }
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Percentage").accessibilityHidden(true)
+                        Slider(value: Binding(get: { progression }, set: { target = .progression($0) }), in: 0...1)
+                            .accessibilityLabel("Percentage")
+                            .accessibilityValue(progression.formatted(percentageFormat))
+                    }
+                    if !session.contents.isEmpty {
+                        NavigationLink("Choose Chapter") {
+                            ReaderContentsView(session: session, mode: .chooseChapter { target = .chapter($0) })
+                        }
                     }
                 }
             }
-            .frame(height: 44)
-            .overlay(alignment: .top) {
-                if draftProgression != nil {
-                    Text(previewLabel).font(.caption.monospacedDigit())
-                        .padding(8).background(.regularMaterial, in: Capsule())
-                        .offset(y: -24).allowsHitTesting(false)
+            .navigationTitle("Go to Position").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Go") { jump() }
+                        .disabled(target == nil || session.isNavigating || session.isRestoring)
                 }
             }
-            .accessibilityLabel("Reading progress")
-            .accessibilityValue(previewLabel)
-            .accessibilityHint("Adjust to jump to the selected position")
-        .disabled(!session.ready || session.isRestoring || session.isNavigating)
+        }
+    }
+
+    private func jump() {
+        guard let target, !session.isNavigating, !session.isRestoring else { return }
+        dismiss()
+        Task {
+            switch target {
+            case .progression(let value): await session.jump(toProgression: value)
+            case .chapter(let item): await session.go(item)
+            }
+        }
     }
 }
 
@@ -307,7 +348,11 @@ struct PDFPageJumpView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var pageInput = ""
     @State private var pageInputError: String?
+    @State private var submitting = false
     @FocusState private var pageInputFocused: Bool
+
+    private var enteredPage: String { pageInput.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var isBusy: Bool { submitting || session.isNavigating || session.isRestoring }
 
     var body: some View {
         NavigationStack {
@@ -321,9 +366,8 @@ struct PDFPageJumpView: View {
                             .focused($pageInputFocused)
                             .accessibilityLabel("Go to Page")
                             .accessibilityIdentifier("pdf.pageInput")
-                            .onSubmit { jump() }
                             .onChange(of: pageInput) { pageInputError = nil }
-                            .disabled(session.isNavigating)
+                            .disabled(isBusy)
                     }
                 } footer: {
                     if let pageInputError { Text(pageInputError).foregroundColor(.red) }
@@ -332,31 +376,48 @@ struct PDFPageJumpView: View {
             }
             .navigationTitle("Go to Page").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.disabled(submitting)
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Go") { jump() }
-                        .disabled(pageInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.isNavigating || session.isRestoring)
+                        .disabled(enteredPage.isEmpty || isBusy)
                 }
             }
             .task { pageInputFocused = true }
         }
+        .interactiveDismissDisabled(submitting)
     }
 
     private func jump() {
+        guard !isBusy else { return }
         guard let count = session.pdfPageCount,
-              let page = Int(pageInput.trimmingCharacters(in: .whitespacesAndNewlines)), (1...count).contains(page) else {
+              let page = Int(enteredPage), (1...count).contains(page) else {
             pageInputError = String(localized: "Enter a page number from 1 to \(session.pdfPageCount ?? 0).")
             return
         }
+        pageInputError = nil
         pageInputFocused = false
+        submitting = true
         Task {
-            await session.jump(toPage: page)
-            if session.currentPDFPage == page { dismiss() }
+            defer { submitting = false }
+            let reachedPage = await session.jump(toPage: page) { pageInputError = $0.localizedDescription }
+            if reachedPage {
+                dismiss()
+            } else if pageInputError == nil {
+                pageInputError = String(localized: "Couldn’t jump to the selected position.")
+            }
         }
     }
 }
 private struct ReaderContentsView: View {
+    enum Mode {
+        case browse
+        case chooseChapter((ContentsItem) -> Void)
+    }
+
     @ObservedObject var session: ReaderSession
+    let mode: Mode
     @Environment(\.dismiss) private var dismiss
     @State private var locating = true
     @State private var searchText = ""
@@ -368,52 +429,69 @@ private struct ReaderContentsView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollViewReader { proxy in
-                List {
-                    if !locating && !filteredContents.contains(where: { $0.id == session.currentContentsID }) { currentPosition }
-                    ForEach(filteredContents) { item in
-                        VStack(alignment: .leading, spacing: 0) {
-                            Button {
-                                dismiss()
-                                Task { await session.go(item) }
-                            } label: {
-                                HStack(spacing: 16) {
-                                    Text(item.title)
-                                        .fontWeight(item.id == session.currentContentsID ? .semibold : .regular)
-                                        .foregroundColor(item.id == session.currentContentsID ? .accentColor : .primary)
-                                    Spacer(minLength: 8)
-                                    if item.id == session.currentContentsID {
-                                        Image(systemName: "checkmark").foregroundColor(.accentColor)
-                                            .accessibilityLabel("Current chapter")
-                                    }
-                                    if let page = item.pdfPage {
-                                        Text("\(page + 1)").font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
-                                    }
-                                }.padding(.vertical, 8).frame(minHeight: 44)
-                            }
-                            .disabled(session.isNavigating)
-                            if !locating && item.id == session.currentContentsID { currentPosition }
+        switch mode {
+        case .browse:
+            contents(showCurrentPosition: true) { item in
+                Task { await session.go(item) }
+            }
+            .navigationTitle("Contents")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+        case .chooseChapter(let onSelect):
+            contents(showCurrentPosition: false, onSelect: onSelect)
+                .navigationTitle("Choose Chapter")
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func contents(showCurrentPosition: Bool, onSelect: @escaping (ContentsItem) -> Void) -> some View {
+        ScrollViewReader { proxy in
+            List {
+                if showCurrentPosition && !locating && !filteredContents.contains(where: { $0.id == session.currentContentsID }) { currentPosition }
+                ForEach(filteredContents) { item in
+                    VStack(alignment: .leading, spacing: 0) {
+                        Button {
+                            dismiss()
+                            onSelect(item)
+                        } label: {
+                            HStack(spacing: 16) {
+                                Text(item.title)
+                                    .fontWeight(item.id == session.currentContentsID ? .semibold : .regular)
+                                    .foregroundColor(item.id == session.currentContentsID ? .accentColor : .primary)
+                                Spacer(minLength: 8)
+                                if item.id == session.currentContentsID {
+                                    Image(systemName: "checkmark").foregroundColor(.accentColor)
+                                        .accessibilityLabel("Current chapter")
+                                }
+                                if let page = item.pdfPage {
+                                    Text("\(page + 1)").font(.subheadline.monospacedDigit()).foregroundColor(.secondary)
+                                }
+                            }.padding(.vertical, 8).frame(minHeight: 44)
                         }
-                    }
-                    if filteredContents.isEmpty && !searchText.isEmpty {
-                        Text("No matching chapters").foregroundColor(.secondary)
+                        .disabled(session.isNavigating)
+                        if showCurrentPosition && !locating && item.id == session.currentContentsID { currentPosition }
                     }
                 }
-                .listStyle(.plain)
-                .searchable(text: $searchText, prompt: "Search chapters")
-                .overlay { if locating { ProgressView("Finding position…") } }
-                .task {
-                    await session.refreshContentsPosition()
-                    guard !Task.isCancelled else { return }
-                    locating = false
-                }
-                .onChange(of: locating) { _, value in
-                    if !value { proxy.scrollTo(positionID, anchor: .center) }
+                if filteredContents.isEmpty && !searchText.isEmpty {
+                    Text("No matching chapters").foregroundColor(.secondary)
                 }
             }
-            .navigationTitle("Contents").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
+            .listStyle(.plain)
+            .searchable(text: $searchText, prompt: "Search chapters")
+            .overlay { if locating { ProgressView("Finding position…") } }
+            .task {
+                await session.refreshContentsPosition()
+                guard !Task.isCancelled else { return }
+                locating = false
+            }
+            .onChange(of: locating) { _, value in
+                guard !value else { return }
+                if showCurrentPosition {
+                    proxy.scrollTo(positionID, anchor: .center)
+                } else if let current = session.currentContentsID {
+                    proxy.scrollTo(current, anchor: .center)
+                }
+            }
         }
     }
 

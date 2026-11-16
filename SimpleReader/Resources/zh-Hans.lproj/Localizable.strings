@@ -5,8 +5,6 @@
 "%@ is already in your library." = "%@：已在书库中，无需重复导入。";
 "%@ queued" = "%@ 等待下载";
 "%@ removed from library" = "%@ 已从书库移除";
-"%@, go to page" = "%@，跳转页码";
-"%@, show reading controls" = "%@，显示阅读操作栏";
 "%lld active, %lld failed" = "%lld 项进行中，%lld 项失败";
 "%lld selected" = "已选择 %lld 本";
 "%lld%% read" = "读到 %lld%%";
@@ -19,7 +17,6 @@
 "Removed from library" = "已从书库移除";
 "Adding %@ to library…" = "%@ 正在加入书库…";
 "Adding to library" = "正在加入书库";
-"Adjust to jump to the selected position" = "调整后跳转到所选位置";
 "All Books" = "全部图书";
 "App Information" = "应用信息";
 "App License" = "应用许可";
@@ -39,6 +36,7 @@
 "Canceled" = "已取消";
 "Chapter" = "章节";
 "Chapter content isn’t visible yet. Try again." = "章节内容尚未显示，请重试。";
+"Choose Chapter" = "选择章节";
 "Choose a Reading Position" = "选择阅读位置";
 "Choose a reading position to sync" = "需要选择同步位置";
 "Choose an EPUB or PDF file." = "请选择 EPUB 或 PDF 文件";
@@ -86,6 +84,7 @@
 "Delete Selected (%lld)" = "删除所选（%lld）";
 "Delete selected books (%lld)?" = "删除 %lld 本图书？";
 "Deselect All" = "取消全选";
+"Destination" = "跳转目标";
 "Devices" = "适用设备";
 "Dismiss" = "收起";
 "Done" = "完成";
@@ -115,6 +114,7 @@
 "Font size: %lld%%" = "字号 %lld%%";
 "Go" = "跳转";
 "Go to Page" = "跳转页码";
+"Go to Position" = "跳转位置";
 "Hide Reading Controls" = "收起阅读操作栏";
 "Import Books" = "导入图书";
 "Import an EPUB or PDF, or download a book from an online library." = "导入 EPUB 或 PDF，也可以从在线书库下载。";
@@ -165,6 +165,7 @@
 "Open Source" = "开源";
 "Open-Source Licenses" = "开源许可";
 "Opening…" = "正在打开…";
+"Opens the position jump panel" = "打开跳转面板";
 "Page" = "页码";
 "Page %lld" = "第 %lld 页";
 "Page %lld of %lld" = "第 %lld / %lld 页";
@@ -173,6 +174,7 @@
 "Page number outside this book’s range." = "页码不在本书范围内";
 "Paginated" = "分页";
 "Password" = "密码";
+"Percentage" = "百分比";
 "Previous page" = "上一页";
 "Public servers require HTTPS. HTTP is available only on local networks." = "公网服务器必须使用 HTTPS；HTTP 仅用于局域网";
 "Queued" = "等待下载";
