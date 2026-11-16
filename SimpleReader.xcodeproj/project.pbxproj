@@ -35,6 +35,7 @@
 		00000000000000000000003E /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000023 /* ReadiumShared */; };
 		00000000000000000000003F /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000024 /* ReadiumStreamer */; };
 		000000000000000000000040 /* ReadiumNavigator in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000025 /* ReadiumNavigator */; };
+		00000000000000000000006A /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000069 /* SwiftSoup */; };
 		000000000000000000000042 /* SimpleReader/Resources/EPUBPositionBridge.js in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */; };
 		000000000000000000000043 /* SimpleReader/Resources/LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000019 /* SimpleReader/Resources/LICENSE.txt */; };
 		000000000000000000000044 /* SimpleReader/Resources/Licenses in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001A /* SimpleReader/Resources/Licenses */; };
@@ -136,6 +137,7 @@
 				00000000000000000000003E /* ReadiumShared in Frameworks */,
 				00000000000000000000003F /* ReadiumStreamer in Frameworks */,
 				000000000000000000000040 /* ReadiumNavigator in Frameworks */,
+				00000000000000000000006A /* SwiftSoup in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -244,6 +246,7 @@
 				000000000000000000000023 /* ReadiumShared */,
 				000000000000000000000024 /* ReadiumStreamer */,
 				000000000000000000000025 /* ReadiumNavigator */,
+				000000000000000000000069 /* SwiftSoup */,
 			);
 			productName = SimpleReader;
 			productReference = 00000000000000000000001E /* SimpleReader.app */;
@@ -287,6 +290,7 @@
 			mainGroup = 000000000000000000000021;
 			packageReferences = (
 				000000000000000000000022 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
+				000000000000000000000068 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 			);
 			productRefGroup = 000000000000000000000020 /* Products */;
 			projectDirPath = "";
@@ -569,6 +573,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		000000000000000000000068 /* XCRemoteSwiftPackageReference "SwiftSoup" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/scinfu/SwiftSoup.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.13.9;
+			};
+		};
 		000000000000000000000022 /* XCRemoteSwiftPackageReference "swift-toolkit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/readium/swift-toolkit.git";
@@ -580,6 +592,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		000000000000000000000069 /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000068 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			productName = SwiftSoup;
+		};
 		000000000000000000000023 /* ReadiumShared */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 000000000000000000000022 /* XCRemoteSwiftPackageReference "swift-toolkit" */;

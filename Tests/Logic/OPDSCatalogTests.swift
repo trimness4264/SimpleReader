@@ -24,6 +24,69 @@ final class OPDSCatalogTests: XCTestCase {
         XCTAssertThrowsError(try OPDSParser.parse(Data("<html><body>Sign in</body></html>".utf8), base: URL(string: "https://books.example.com")!))
     }
 
+    func testCatalogConvertsHTMLDescriptionsToReadableText() throws {
+        let xml = """
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry><summary type="html">
+            &lt;p&gt;第一次&lt;em&gt;遇见&lt;/em&gt;她。&lt;/p&gt;
+
+            &lt;p&gt;安达 &amp;amp; 岛村&lt;br&gt;续篇&amp;hellip;&lt;/p&gt;
+          </summary></entry>
+          <entry><content type="text/html"><![CDATA[<p>第一段</p><p>第二段</p>]]></content></entry>
+          <entry><content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">
+            <p>安达 <em>和</em> 岛村</p><p>简介<br/>续篇</p>
+          </div></content></entry>
+          <entry>
+            <id>urn:uuid:2853dacf-ed79-42f5-8e8a-a7bb3d1ae6a2</id>
+            <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">
+              <p>&lt;p&gt;HTML 示例&lt;/p&gt;</p>
+            </div></content>
+          </entry>
+          <entry><summary type="text">A &lt; B &amp; C &gt; D</summary></entry>
+        </feed>
+        """
+
+        let catalog = try OPDSParser.parse(Data(xml.utf8), base: URL(string: "https://books.example.com")!)
+
+        XCTAssertEqual(catalog.entries.map(\.summary), [
+            "第一次遇见她。\n\n安达 & 岛村\n续篇…",
+            "第一段\n\n第二段",
+            "安达 和 岛村\n\n简介\n续篇",
+            "<p>HTML 示例</p>",
+            "A < B & C > D",
+        ])
+    }
+
+    func testCatalogDecodesEscapedCalibreWebComments() throws {
+        let xml = """
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry><content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">
+            TAGS: 百合<br/>
+            <p>&lt;p&gt;第一次在体育馆二楼遇见她。&lt;/p&gt;&lt;p&gt;续篇&amp;hellip;&lt;/p&gt;</p>
+          </div></content></entry>
+          <entry><content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">
+            <p>&lt;h2&gt;标题&lt;/h2&gt;&lt;p&gt;简介。&lt;/p&gt;</p>
+          </div></content></entry>
+          <entry><content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">
+            <p>&lt;p&gt;第一段。&lt;/p&gt;尾注</p>
+          </div></content></entry>
+          <entry><summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">
+            <p>&lt;p&gt;HTML 示例&lt;/p&gt;</p>
+          </div></summary></entry>
+          <id>urn:uuid:2853dacf-ed79-42f5-8e8a-a7bb3d1ae6a2</id>
+        </feed>
+        """
+
+        let catalog = try OPDSParser.parse(Data(xml.utf8), base: URL(string: "https://books.example.com")!)
+
+        XCTAssertEqual(catalog.entries.map(\.summary), [
+            "TAGS: 百合\n\n第一次在体育馆二楼遇见她。\n\n续篇…",
+            "标题\n\n简介。",
+            "第一段。\n\n尾注",
+            "<p>HTML 示例</p>",
+        ])
+    }
+
     func testOpenSearchPreservesChineseAndReservedCharacters() async throws {
         let (http, origin) = HTTPStub.client(for: self) { _ in
             (200, """

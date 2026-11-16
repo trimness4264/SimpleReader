@@ -5,9 +5,11 @@ import PackageDescription
 let package = Package(
     name: "SimpleReaderLogic",
     platforms: [.macOS(.v13)],
+    dependencies: [.package(url: "https://github.com/scinfu/SwiftSoup.git", exact: "2.13.9")],
     targets: [
         .target(
             name: "SimpleReader",
+            dependencies: ["SwiftSoup"],
             path: "SimpleReader",
             exclude: ["App", "Views", "Reader", "Resources", "Services/BookImportService.swift",
                       "Services/DownloadManager.swift", "Services/ReadiumService.swift"],
