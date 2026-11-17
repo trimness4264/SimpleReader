@@ -84,18 +84,26 @@ import ReadiumNavigator
 
     func restore(_ locator: Locator?, pointer: String?, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws {
         if let locator = locator {
-            var loaded = false
-            for _ in 0..<50 {
+            if navigator is ContinuousEPUBController {
+                // Continuous navigation confirms its target document and layout before returning.
                 try check(isCurrent)
-                if await navigator.go(to: locator) {
+                let loaded = await navigator.go(to: locator)
+                try check(isCurrent)
+                guard loaded else { throw AppFailure("Restoring the text timed out. Try again.") }
+            } else {
+                var loaded = false
+                for _ in 0..<50 {
                     try check(isCurrent)
-                    let result = await navigator.evaluateJavaScript("Boolean(document.body && document.readyState !== 'loading')")
-                    try check(isCurrent)
-                    if (try? result.get()) as? Bool == true { loaded = true; break }
+                    if await navigator.go(to: locator) {
+                        try check(isCurrent)
+                        let result = await navigator.evaluateJavaScript("Boolean(document.body && document.readyState !== 'loading')")
+                        try check(isCurrent)
+                        if (try? result.get()) as? Bool == true { loaded = true; break }
+                    }
+                    try await Task.sleep(nanoseconds: 100_000_000)
                 }
-                try await Task.sleep(nanoseconds: 100_000_000)
+                guard loaded else { throw AppFailure("Restoring the text timed out. Try again.") }
             }
-            guard loaded else { throw AppFailure("Restoring the text timed out. Try again.") }
         }
         if let pointer = pointer {
             _ = try await go(toPointer: pointer, in: navigator, isCurrent: isCurrent)

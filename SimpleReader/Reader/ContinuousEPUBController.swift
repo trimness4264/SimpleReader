@@ -26,6 +26,7 @@ extension EPUBReadingNavigator {
     private(set) var currentLocation: Locator?
     var onLocationChanged: ((Locator) -> Void)?
     var onScrollBegan: (() -> Void)?
+    var onLinkActivated: ((Link) -> Void)?
     var onError: ((Error) -> Void)?
     var onContentTap: (() -> Void)?
     let scrollView = UIScrollView()
@@ -33,9 +34,7 @@ extension EPUBReadingNavigator {
     private let initialLocation: Locator?
     private var settings: ReaderSettings
     private var layout: ContinuousEPUBLayout
-    private var webViews: [Int: WKWebView] = [:]
-    private var loaded: Set<Int> = []
-    private var failures: [Int: Error] = [:]
+    private var chapterViews: [Int: ChapterView] = [:]
     private var width: CGFloat = 0
     private var started = false
     private var closed = false
@@ -92,7 +91,7 @@ extension EPUBReadingNavigator {
         let changed = newWidth != width
         width = newWidth
         layoutChapters()
-        if changed { for webView in webViews.values { applyStyle(to: webView) } }
+        if changed { for chapter in chapterViews.values { applyStyle(to: chapter.webView) } }
         if !started {
             started = true
             startupTask = Task { [weak self] in
@@ -107,25 +106,20 @@ extension EPUBReadingNavigator {
         closed = true
         startupTask?.cancel()
         scrollView.delegate = nil
-        for webView in webViews.values {
-            webView.stopLoading()
-            webView.navigationDelegate = nil
-            webView.configuration.userContentController.removeScriptMessageHandler(forName: "continuousChapterHeight")
-            webView.superview?.removeFromSuperview()
-        }
-        webViews.removeAll()
+        for index in Array(chapterViews.keys) { removeChapter(index) }
         server.close()
     }
 
     func cancelNavigation() {
         navigationRevision += 1
         navigating = false
+        for chapter in chapterViews.values { chapter.cancelWaits() }
     }
 
     func updateSettings(_ settings: ReaderSettings) {
         self.settings = settings
         applyBackground()
-        for webView in webViews.values { applyStyle(to: webView) }
+        for chapter in chapterViews.values { applyStyle(to: chapter.webView) }
     }
 
     private var dark: Bool { settings.theme.isDark ?? (traitCollection.userInterfaceStyle == .dark) }
@@ -135,7 +129,7 @@ extension EPUBReadingNavigator {
         let color = UIColor(white: CGFloat(backgroundLevel) / 255, alpha: 1)
         view.backgroundColor = color
         scrollView.backgroundColor = color
-        for webView in webViews.values { webView.backgroundColor = color }
+        for chapter in chapterViews.values { chapter.webView.backgroundColor = color }
     }
 
     private var style: String {
@@ -164,7 +158,7 @@ extension EPUBReadingNavigator {
     }
 
     private func startChapter(_ index: Int) {
-        guard !closed, layout.chapters.contains(index), webViews[index] == nil else { return }
+        guard !closed, layout.chapters.contains(index), chapterViews[index] == nil else { return }
         let configuration = WKWebViewConfiguration()
         configuration.setURLSchemeHandler(server, forURLScheme: server.scheme)
         configuration.userContentController.add(messages, name: "continuousChapterHeight")
@@ -227,13 +221,30 @@ extension EPUBReadingNavigator {
         webView.scrollView.pinchGestureRecognizer?.isEnabled = false
         webView.scrollView.bounces = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webViews[index] = webView
+        let chapter = ChapterView(webView: webView, url: server.url(for: publication.readingOrder[index].href))
+        chapterViews[index] = chapter
         let clip = UIView()
         clip.clipsToBounds = true
         clip.addSubview(webView)
         scrollView.addSubview(clip)
         layoutChapters()
-        webView.load(URLRequest(url: server.url(for: publication.readingOrder[index].href)))
+        loadChapter(chapter, at: index)
+    }
+
+    private func loadChapter(_ chapter: ChapterView, at index: Int) {
+        if !chapter.load() {
+            failChapter(chapter, at: index, with: AppFailure("Couldn’t open the chapter."))
+        }
+    }
+
+    private func removeChapter(_ index: Int) {
+        guard let chapter = chapterViews.removeValue(forKey: index) else { return }
+        chapter.cancelWaits()
+        let webView = chapter.webView
+        webView.navigationDelegate = nil
+        webView.stopLoading()
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "continuousChapterHeight")
+        webView.superview?.removeFromSuperview()
     }
 
     private func retainChapters(target: Int? = nil) {
@@ -241,15 +252,7 @@ extension EPUBReadingNavigator {
         let viewport = viewport
         let index = target ?? layout.visibleChapter(in: viewport)
         let range = layout.retainedChapters(in: viewport, target: target)
-        for i in Array(webViews.keys) where !range.contains(i) {
-            webViews[i]?.stopLoading()
-            webViews[i]?.navigationDelegate = nil
-            webViews[i]?.configuration.userContentController.removeScriptMessageHandler(forName: "continuousChapterHeight")
-            webViews[i]?.superview?.removeFromSuperview()
-            webViews.removeValue(forKey: i)
-            loaded.remove(i)
-            failures.removeValue(forKey: i)
-        }
+        for i in Array(chapterViews.keys) where !range.contains(i) { removeChapter(i) }
         startChapter(index)
         for i in range where i != index { startChapter(i) }
     }
@@ -285,7 +288,8 @@ extension EPUBReadingNavigator {
 
     private func layoutVisibleChapters() {
         let viewport = viewport
-        for (index, webView) in webViews {
+        for (index, chapter) in chapterViews {
+            let webView = chapter.webView
             let frame = layout.frame(for: index, in: viewport)
             webView.superview?.frame = frame.clip
             webView.frame = frame.web
@@ -296,7 +300,7 @@ extension EPUBReadingNavigator {
     }
 
     fileprivate func measuredHeight(index: Int, height: CGFloat, webView: WKWebView?) {
-        guard !closed, let active = webViews[index], active === webView else { return }
+        guard !closed, let active = chapterViews[index]?.webView, active === webView else { return }
         let viewport = viewport
         guard let position = layout.measure(height, chapter: index, in: viewport) else { return }
         applyScrollPosition(position)
@@ -305,8 +309,13 @@ extension EPUBReadingNavigator {
 
     fileprivate func contentTapped(index: Int, webView: WKWebView?) {
         guard !closed, !navigating, !scrollView.isDragging, !scrollView.isDecelerating,
-              let active = webViews[index], active === webView else { return }
+              let active = chapterViews[index]?.webView, active === webView else { return }
         onContentTap?()
+    }
+
+    fileprivate func isCurrentChapterFrame(_ url: URL?, at index: Int, webView: WKWebView?) -> Bool {
+        guard let chapter = chapterViews[index], chapter.webView === webView else { return false }
+        return chapter.isLoadedDocument && chapter.matches(url)
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -330,21 +339,22 @@ extension EPUBReadingNavigator {
         onLocationChanged?(locator)
     }
 
-    private func waitForChapter(_ index: Int) async throws -> WKWebView {
+    private func waitForChapter(_ index: Int, revision: Int) async throws -> (ChapterView, WKNavigation) {
+        try Task.checkCancellation()
         startChapter(index)
-        for _ in 0..<400 {
-            try Task.checkCancellation()
-            guard !closed, let webView = webViews[index] else { throw CancellationError() }
-            if let failure = failures[index] { throw failure }
-            if loaded.contains(index) {
-                let measured = try await webView.callAsyncJavaScript("await document.fonts.ready; return Math.ceil(Math.max(document.body.scrollHeight,document.body.getBoundingClientRect().height));", arguments: [:], in: nil, contentWorld: .page)
-                if let height = measured as? Double { measuredHeight(index: index, height: CGFloat(height), webView: webView) }
-                guard !closed, webViews[index] === webView else { throw CancellationError() }
-                return webView
-            }
-            try await Task.sleep(nanoseconds: 16_000_000)
+        guard let chapter = chapterViews[index], !closed else { throw CancellationError() }
+        let document = try await chapter.run(.measure)
+        guard isCurrent(chapter, document.navigation, at: index, revision: revision) else { throw CancellationError() }
+        if let height = document.value as? Double {
+            measuredHeight(index: index, height: CGFloat(height), webView: chapter.webView)
         }
-        throw AppFailure("The chapter took too long to load. Try again.")
+        guard isCurrent(chapter, document.navigation, at: index, revision: revision) else { throw CancellationError() }
+        return (chapter, document.navigation)
+    }
+
+    private func isCurrent(_ chapter: ChapterView, _ navigation: WKNavigation, at index: Int, revision: Int) -> Bool {
+        !closed && revision == navigationRevision && !Task.isCancelled &&
+            chapterViews[index] === chapter && chapter.isLoaded(navigation)
     }
 
     func evaluateJavaScript(_ script: String) async -> Result<Any, Error> {
@@ -352,10 +362,13 @@ extension EPUBReadingNavigator {
             let index = currentLocation.flatMap { location in
                 publication.readingOrder.firstIndex { EPUBPositionBridge.normalize($0.href) == EPUBPositionBridge.normalize(location.href.string) }
             } ?? layout.visibleChapter(in: viewport)
-            let webView = try await waitForChapter(index)
+            let revision = navigationRevision
+            let (chapter, navigation) = try await waitForChapter(index, revision: revision)
             let range = layout.readableRange(in: index, viewport: viewport)
             let prefix = "window.SimpleReaderViewport={top:\(range.lowerBound)-window.scrollY,bottom:\(range.upperBound)-window.scrollY};\n"
-            return .success(try await webView.evaluateJavaScript(prefix + script) as Any)
+            let result = try await chapter.run(.evaluate(prefix + script, navigation))
+            guard isCurrent(chapter, navigation, at: index, revision: revision) else { throw CancellationError() }
+            return .success(result.value)
         } catch { return .failure(error) }
     }
 
@@ -375,17 +388,17 @@ extension EPUBReadingNavigator {
     }
 
     func go(to locator: Locator, options: NavigatorGoOptions) async -> Bool {
-        guard !closed, let index = publication.readingOrder.firstIndex(where: {
+        guard !closed, !Task.isCancelled, let index = publication.readingOrder.firstIndex(where: {
             EPUBPositionBridge.normalize($0.href) == EPUBPositionBridge.normalize(locator.href.string)
         }) else { return false }
-        navigationRevision += 1
+        cancelNavigation()
         let revision = navigationRevision
         navigating = true
         defer { if revision == navigationRevision { navigating = false } }
         do {
+            if chapterViews[index]?.needsReload == true { removeChapter(index) }
             retainChapters(target: index)
-            let webView = try await waitForChapter(index)
-            guard revision == navigationRevision, !Task.isCancelled else { return false }
+            let (chapter, navigation) = try await waitForChapter(index, revision: revision)
             let locations = locator.locations.otherLocations
             let fragment = locator.locations.fragments.first ?? locator.href.string.components(separatedBy: "#").dropFirst().joined(separator: "#")
             var target: [String: Any] = ["selector": locations["cssSelector"] ?? "", "fragment": fragment,
@@ -414,8 +427,9 @@ extension EPUBReadingNavigator {
               return Math.max(0,document.body.scrollHeight*location.progression);
             })();
             """
-            let localY = try await webView.evaluateJavaScript(script) as? Double ?? 0
-            guard !closed, revision == navigationRevision, !Task.isCancelled else { return false }
+            let result = try await chapter.run(.evaluate(script, navigation))
+            guard isCurrent(chapter, navigation, at: index, revision: revision) else { return false }
+            let localY = result.value as? Double ?? 0
             applyScrollPosition(layout.align(chapter: index, at: CGFloat(localY), in: viewport))
             let progression = layout.progression(in: index, viewport: viewport)
             let total = (Double(index) + progression) / Double(layout.chapters.count)
@@ -427,35 +441,224 @@ extension EPUBReadingNavigator {
             onLocationChanged?(location)
             return true
         } catch is CancellationError { return false }
-        catch { onError?(error); return false }
+        catch {
+            if !closed, revision == navigationRevision, !Task.isCancelled { onError?(error) }
+            return false
+        }
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard let index = webViews.first(where: { $0.value === webView })?.key else { return }
-        loaded.insert(index)
-        failures.removeValue(forKey: index)
-        applyStyle(to: webView)
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard let navigation, let (_, chapter) = chapter(for: webView) else { return }
+        chapter.didStart(navigation)
     }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(webView, error: error) }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(webView, error: error) }
-    private func failed(_ webView: WKWebView, error: Error) {
-        guard !closed, let index = webViews.first(where: { $0.value === webView })?.key else { return }
-        failures[index] = error
-        onError?(error)
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let navigation, let (index, chapter) = chapter(for: webView), chapter.isLoading(navigation) else { return }
+        guard chapter.matches(webView.url) else {
+            failChapter(chapter, at: index, with: AppFailure("Couldn’t open the chapter."))
+            return
+        }
+        applyStyle(to: webView)
+        chapter.didLoad(navigation)
+    }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        navigationFailed(webView, navigation: navigation, error: error)
+    }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        navigationFailed(webView, navigation: navigation, error: error)
+    }
+    private func navigationFailed(_ webView: WKWebView, navigation: WKNavigation?, error: Error) {
+        guard let navigation, let (index, chapter) = chapter(for: webView), chapter.isLoading(navigation) else { return }
+        // WebKit can cancel a provisional load just before starting its replacement.
+        if (error as? URLError)?.code == .cancelled { return }
+        failChapter(chapter, at: index, with: error)
+    }
+    private func chapter(for webView: WKWebView) -> (Int, ChapterView)? {
+        guard !closed else { return nil }
+        return chapterViews.first(where: { $0.value.webView === webView })
+    }
+    private func failChapter(_ chapter: ChapterView, at index: Int, with error: Error) {
+        chapter.didFail(error)
+        if !navigating, index == layout.visibleChapter(in: viewport) { onError?(error) }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        guard let index = webViews.first(where: { $0.value === webView })?.key else { return }
-        loaded.remove(index)
-        webView.reload()
+        guard let (index, chapter) = chapter(for: webView) else { return }
+        // Waiting callers can use the replacement document without extending their deadlines.
+        loadChapter(chapter, at: index)
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url else { decisionHandler(.allow); return }
         decisionHandler(.cancel)
-        guard url.scheme == server.scheme, url.host == server.baseURL.host else { return }
-        let href = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + (url.fragment.map { "#" + $0 } ?? "")
-        guard let target = AnyURL(string: href) else { return }
-        onScrollBegan?()
-        Task { [weak self] in guard let self = self else { return }; _ = await self.go(to: Locator(href: target, mediaType: .xhtml)) }
+        guard !closed, chapterViews.values.contains(where: { $0.webView === webView }),
+              url.scheme == server.scheme, url.host == server.baseURL.host else { return }
+        let path = url.path(percentEncoded: true).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let href = path + (url.fragment(percentEncoded: true).map { "#" + $0 } ?? "")
+        guard AnyURL(string: href) != nil else { return }
+        onLinkActivated?(Link(href: href, mediaType: .xhtml))
+    }
+
+    private struct JavaScriptResult {
+        let navigation: WKNavigation
+        let value: Any
+    }
+
+    @MainActor private final class ChapterView {
+        private enum State {
+            case idle, loading(WKNavigation), loaded(WKNavigation), failed(Error)
+
+            var navigation: WKNavigation? {
+                switch self {
+                case .loading(let navigation), .loaded(let navigation): return navigation
+                case .idle, .failed: return nil
+                }
+            }
+        }
+
+        enum JavaScript {
+            case measure
+            case evaluate(String, WKNavigation)
+        }
+
+        private struct Wait {
+            let script: JavaScript
+            let continuation: CheckedContinuation<JavaScriptResult, Error>
+            let timeout: Task<Void, Never>
+        }
+
+        let webView: WKWebView
+        private let url: URL
+        private var state = State.idle
+        private weak var replacedNavigation: WKNavigation?
+        private var waits: [UUID: Wait] = [:]
+        private(set) var needsReload = false
+
+        init(webView: WKWebView, url: URL) {
+            self.webView = webView
+            self.url = url
+        }
+
+        var isLoadedDocument: Bool {
+            if case .loaded = state { return true }
+            return false
+        }
+
+        func matches(_ candidate: URL?) -> Bool {
+            guard let candidate else { return false }
+            return candidate.scheme == url.scheme && candidate.host == url.host &&
+                candidate.path(percentEncoded: true) == url.path(percentEncoded: true)
+        }
+
+        func load() -> Bool {
+            replacedNavigation = state.navigation
+            replaceDocument(with: .idle)
+            guard let navigation = webView.load(URLRequest(url: url)) else { return false }
+            state = .loading(navigation)
+            return true
+        }
+
+        func didStart(_ navigation: WKNavigation) {
+            guard navigation !== replacedNavigation, navigation !== state.navigation else { return }
+            replaceDocument(with: .loading(navigation))
+        }
+
+        func isLoading(_ navigation: WKNavigation) -> Bool {
+            guard case .loading(let active) = state else { return false }
+            return active === navigation
+        }
+
+        func isLoaded(_ navigation: WKNavigation) -> Bool {
+            guard case .loaded(let active) = state else { return false }
+            return active === navigation
+        }
+
+        func run(_ script: JavaScript) async throws -> JavaScriptResult {
+            let id = UUID()
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    guard !Task.isCancelled else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    if case .failed(let error) = state {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    if case .evaluate(_, let navigation) = script, !isLoaded(navigation) {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    let timeout = Task { [weak self] in
+                        do { try await Task.sleep(for: .milliseconds(6_400)) } catch { return }
+                        self?.timeOut(id)
+                    }
+                    waits[id] = Wait(script: script, continuation: continuation, timeout: timeout)
+                    if case .loaded(let navigation) = state { execute(script, for: id, in: navigation) }
+                }
+            } onCancel: { [weak self] in
+                Task { @MainActor in self?.finish(id, with: .failure(CancellationError())) }
+            }
+        }
+
+        func didLoad(_ navigation: WKNavigation) {
+            state = .loaded(navigation)
+            needsReload = false
+            for (id, wait) in waits { execute(wait.script, for: id, in: navigation) }
+        }
+
+        func didFail(_ error: Error) {
+            state = .failed(error)
+            needsReload = true
+            for id in Array(waits.keys) { finish(id, with: .failure(error)) }
+        }
+
+        func cancelWaits() {
+            for id in Array(waits.keys) { finish(id, with: .failure(CancellationError())) }
+        }
+
+        private func replaceDocument(with state: State) {
+            self.state = state
+            needsReload = false
+            // Measurements can follow a replacement load. A script targets one concrete document.
+            for (id, wait) in waits {
+                if case .evaluate = wait.script { finish(id, with: .failure(CancellationError())) }
+            }
+        }
+
+        private func execute(_ script: JavaScript, for id: UUID, in navigation: WKNavigation) {
+            let completion: @MainActor @Sendable (Result<Any, Error>) -> Void = { [weak self] result in
+                let finish: @MainActor @Sendable () -> Void = { [weak self] in
+                    guard let self, self.isLoaded(navigation) else { return }
+                    self.finish(id, with: result.map { JavaScriptResult(navigation: navigation, value: $0) })
+                }
+                if case .failure = result {
+                    // Process termination can fail JavaScript before the delegate starts a replacement load.
+                    DispatchQueue.main.async(execute: finish)
+                } else {
+                    finish()
+                }
+            }
+            switch script {
+            case .measure:
+                webView.callAsyncJavaScript("""
+                    await document.fonts.ready;
+                    return Math.ceil(Math.max(document.body.scrollHeight, document.body.getBoundingClientRect().height));
+                    """, in: nil, in: .page, completionHandler: completion)
+            case .evaluate(let source, _):
+                webView.evaluateJavaScript(source, in: nil, in: .page, completionHandler: completion)
+            }
+        }
+
+        private func timeOut(_ id: UUID) {
+            guard waits[id] != nil else { return }
+            let error = AppFailure("The chapter took too long to load. Try again.")
+            needsReload = true
+            finish(id, with: .failure(error))
+        }
+
+        private func finish(_ id: UUID, with result: Result<JavaScriptResult, Error>) {
+            guard let wait = waits.removeValue(forKey: id) else { return }
+            wait.timeout.cancel()
+            wait.continuation.resume(with: result)
+        }
     }
 }
 
@@ -464,10 +667,11 @@ extension EPUBReadingNavigator {
     init(owner: ContinuousEPUBController) { self.owner = owner }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any],
-              let index = body["index"] as? Int else { return }
-        if body["tap"] as? Bool == true { owner?.contentTapped(index: index, webView: message.webView) }
+              let index = body["index"] as? Int, let owner,
+              owner.isCurrentChapterFrame(message.frameInfo.request.url, at: index, webView: message.webView) else { return }
+        if body["tap"] as? Bool == true { owner.contentTapped(index: index, webView: message.webView) }
         else if let height = body["height"] as? Double {
-            owner?.measuredHeight(index: index, height: CGFloat(height), webView: message.webView)
+            owner.measuredHeight(index: index, height: CGFloat(height), webView: message.webView)
         }
     }
 }

@@ -237,6 +237,19 @@ struct SyncPrompt: Identifiable {
                 self.locationChanged(location)
             }
             navigator.onScrollBegan = { [weak self] in self?.positions.movementBegan() }
+            navigator.onLinkActivated = { [weak self, weak navigator] link in
+                guard let self, let navigator, self.continuous === navigator,
+                      self.ready, self.isActive, !self.closed, self.positions.activity == .idle,
+                      !self.container.isTurningPage else { return }
+                // Reject any remote position already in flight before the navigation task starts.
+                self.positions.movementBegan()
+                let movementRevision = self.positions.movementRevision
+                Task { [weak self, weak navigator] in
+                    guard let self, let navigator, self.continuous === navigator,
+                          self.positions.movementRevision == movementRevision else { return }
+                    await self.navigate(to: .link(link))
+                }
+            }
             navigator.onError = { [weak self] error in self?.error = error.localizedDescription }
             navigator.onContentTap = { [weak self] in self?.toggleControls() }
             if let scrollInsets = scrollInsets { navigator.updateScrollInsets(scrollInsets) }
@@ -580,7 +593,10 @@ struct SyncPrompt: Identifiable {
             guard isCurrent() else { throw CancellationError() }
             let changed: Bool
             if let navigator = navigator, let epubPosition = epubPosition, let locator = navigator.currentLocation.map(adjusted) {
-                let pointer = try? await epubPosition.capture(locator, in: navigator)
+                let pointer: String?
+                do { pointer = try await epubPosition.capture(locator, in: navigator) }
+                catch is CancellationError where navigator is ContinuousEPUBController { throw CancellationError() }
+                catch { pointer = nil }
                 guard isCurrent() else { throw CancellationError() }
                 changed = try commit(ReadingPosition(progression: locator.locations.totalProgression ?? progression,
                     locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: Date()), from: .movement, locator: locator)
