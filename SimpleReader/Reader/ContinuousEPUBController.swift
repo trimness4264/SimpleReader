@@ -2,23 +2,6 @@ import UIKit
 import ReadiumShared
 import ReadiumNavigator
 
-@MainActor protocol EPUBReadingNavigator: AnyObject {
-    var publication: Publication { get }
-    var currentLocation: Locator? { get }
-    func evaluateJavaScript(_ script: String) async -> Result<Any, Error>
-    func locator(for anchor: EPUBTextAnchor, in link: Link) throws -> Locator
-    func go(to locator: Locator, options: NavigatorGoOptions) async -> Bool
-    func go(to link: Link, options: NavigatorGoOptions) async -> Bool
-}
-
-extension EPUBNavigatorViewController: EPUBReadingNavigator {}
-
-extension EPUBReadingNavigator {
-    func locator(for anchor: EPUBTextAnchor, in link: Link) throws -> Locator { try anchor.locator(in: link) }
-    func go(to locator: Locator) async -> Bool { await go(to: locator, options: .init(animated: false)) }
-    func go(to link: Link) async -> Bool { await go(to: link, options: .init(animated: false)) }
-}
-
 /// Each chapter keeps its original document. Only the outer scroll view scrolls.
 @MainActor final class ContinuousEPUBController: UIViewController, EPUBReadingNavigator, UIScrollViewDelegate {
     let publication: Publication

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A7C180000000000000000015 /* SimpleReader/Reader/EPUBReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000016 /* SimpleReader/Reader/EPUBReader.swift */; };
 		A7C180000000000000000013 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000014 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift */; };
 		A7C18000000000000000000D /* SimpleReader/Reader/ContinuousChapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */; };
 		A7C18000000000000000000F /* SimpleReader/Reader/ContinuousEPUBStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000010 /* SimpleReader/Reader/ContinuousEPUBStyle.swift */; };
@@ -77,6 +78,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A7C180000000000000000016 /* SimpleReader/Reader/EPUBReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/EPUBReader.swift; sourceTree = "<group>"; };
 		A7C180000000000000000014 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReadiumPageTurnSurface.swift; sourceTree = "<group>"; };
 		A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousChapter.swift; sourceTree = "<group>"; };
 		A7C180000000000000000010 /* SimpleReader/Reader/ContinuousEPUBStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousEPUBStyle.swift; sourceTree = "<group>"; };
@@ -182,6 +184,7 @@
 				000000000000000000000004 /* SimpleReader/Persistence/LibraryStore.swift */,
 				000000000000000000000005 /* SimpleReader/Reader/EPUBPositionBridge.swift */,
 				000000000000000000000006 /* SimpleReader/Reader/ReaderSession.swift */,
+				A7C180000000000000000016 /* SimpleReader/Reader/EPUBReader.swift */,
 				A7C180000000000000000008 /* SimpleReader/Reader/ReaderPositionSession.swift */,
 				A7C18000000000000000000A /* SimpleReader/Reader/PDFReader.swift */,
 				000000000000000000000064 /* SimpleReader/Reader/ContinuousEPUBController.swift */,
@@ -380,6 +383,7 @@
 				00000000000000000000002C /* SimpleReader/Persistence/LibraryStore.swift in Sources */,
 				00000000000000000000002D /* SimpleReader/Reader/EPUBPositionBridge.swift in Sources */,
 				00000000000000000000002E /* SimpleReader/Reader/ReaderSession.swift in Sources */,
+				A7C180000000000000000015 /* SimpleReader/Reader/EPUBReader.swift in Sources */,
 				A7C180000000000000000007 /* SimpleReader/Reader/ReaderPositionSession.swift in Sources */,
 				A7C180000000000000000009 /* SimpleReader/Reader/PDFReader.swift in Sources */,
 				000000000000000000000065 /* SimpleReader/Reader/ContinuousEPUBController.swift in Sources */,

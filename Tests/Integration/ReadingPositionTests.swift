@@ -157,4 +157,51 @@ import UIKit
         server.onRead = nil
         await session.close()
     }
+
+    func testEPUBModeChangesPreservePositionAndReturnHistory() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: epubFile())
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let window = present(session.container)
+        window.windowScene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        window.makeKeyAndVisible()
+        session.container.view.layoutIfNeeded()
+        defer { window.isHidden = true }
+        await session.load()
+        XCTAssertTrue(session.ready, session.error ?? "Reader not ready")
+        let spine = try await readium.spine(store.fileURL(book.filePath))
+        let initial = try XCTUnwrap(store.book(book.id)?.position?.xpointer)
+        let contentsIDs = session.contents.map(\.id)
+        await session.go(try XCTUnwrap(session.contents.dropFirst().first))
+        let saved = try XCTUnwrap(store.book(book.id)?.position)
+        XCTAssertNotEqual(saved.xpointer, initial)
+        XCTAssertTrue(session.canReturnToPreviousPosition)
+
+        for layout in [ReadingLayout.scroll, .paginated] {
+            var settings = store.settings
+            settings.reader.layout = layout
+            settings.reader.fontSize = 160
+            try store.saveSettings(settings)
+            session.updatePreferences()
+            await waitForValue(session.$isRestoring, description: "Reader mode restored") { !$0 }
+
+            XCTAssertNil(session.recoveryError)
+            XCTAssertEqual(session.canBeginPageTurn(isGesture: false), layout == .paginated)
+            XCTAssertEqual(store.book(book.id)?.position, saved)
+            let navigator = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
+            let locator = try XCTUnwrap(navigator.currentLocation)
+            let visible = try await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: spine)
+            XCTAssertEqual(visible, saved.xpointer)
+            XCTAssertEqual(session.contents.map(\.id), contentsIDs)
+            XCTAssertTrue(session.canReturnToPreviousPosition)
+        }
+
+        await session.returnToPreviousPosition()
+        XCTAssertEqual(store.book(book.id)?.position?.xpointer, initial)
+        XCTAssertFalse(session.canReturnToPreviousPosition)
+        XCTAssertNil(session.error)
+        await session.close()
+    }
 }
