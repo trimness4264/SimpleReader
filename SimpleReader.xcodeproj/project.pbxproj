@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A7C18000000000000000000D /* SimpleReader/Reader/ContinuousChapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */; };
+		A7C18000000000000000000F /* SimpleReader/Reader/ContinuousEPUBStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000010 /* SimpleReader/Reader/ContinuousEPUBStyle.swift */; };
+		A7C180000000000000000011 /* SimpleReader/Resources/ContinuousChapter.js in Resources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000012 /* SimpleReader/Resources/ContinuousChapter.js */; };
 		A7C18000000000000000000B /* SimpleReader/Reader/ContinuousEPUBLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000000C /* SimpleReader/Reader/ContinuousEPUBLayout.swift */; };
 		A7C180000000000000000009 /* SimpleReader/Reader/PDFReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000000A /* SimpleReader/Reader/PDFReader.swift */; };
 		A7C180000000000000000007 /* SimpleReader/Reader/ReaderPositionSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000008 /* SimpleReader/Reader/ReaderPositionSession.swift */; };
@@ -73,6 +76,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousChapter.swift; sourceTree = "<group>"; };
+		A7C180000000000000000010 /* SimpleReader/Reader/ContinuousEPUBStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousEPUBStyle.swift; sourceTree = "<group>"; };
+		A7C180000000000000000012 /* SimpleReader/Resources/ContinuousChapter.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = SimpleReader/Resources/ContinuousChapter.js; sourceTree = "<group>"; };
 		A7C18000000000000000000C /* SimpleReader/Reader/ContinuousEPUBLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousEPUBLayout.swift; sourceTree = "<group>"; };
 		A7C18000000000000000000A /* SimpleReader/Reader/PDFReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/PDFReader.swift; sourceTree = "<group>"; };
 		A7C180000000000000000008 /* SimpleReader/Reader/ReaderPositionSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReaderPositionSession.swift; sourceTree = "<group>"; };
@@ -176,6 +182,8 @@
 				A7C180000000000000000008 /* SimpleReader/Reader/ReaderPositionSession.swift */,
 				A7C18000000000000000000A /* SimpleReader/Reader/PDFReader.swift */,
 				000000000000000000000064 /* SimpleReader/Reader/ContinuousEPUBController.swift */,
+				A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */,
+				A7C180000000000000000010 /* SimpleReader/Reader/ContinuousEPUBStyle.swift */,
 				A7C18000000000000000000C /* SimpleReader/Reader/ContinuousEPUBLayout.swift */,
 				000000000000000000000066 /* SimpleReader/Reader/ContinuousPublicationServer.swift */,
 				000000000000000000000007 /* SimpleReader/Services/BookHashing.swift */,
@@ -193,6 +201,7 @@
 				000000000000000000000013 /* SimpleReader/Views/RootView.swift */,
 				000000000000000000000014 /* SimpleReader/Views/SettingsView.swift */,
 				000000000000000000000018 /* SimpleReader/Resources/EPUBPositionBridge.js */,
+				A7C180000000000000000012 /* SimpleReader/Resources/ContinuousChapter.js */,
 				C11000000000000000000003 /* Localizable.strings */,
 				C11000000000000000000004 /* InfoPlist.strings */,
 				000000000000000000000060 /* SimpleReader/Resources/Assets.xcassets */,
@@ -308,6 +317,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000042 /* SimpleReader/Resources/EPUBPositionBridge.js in Resources */,
+				A7C180000000000000000011 /* SimpleReader/Resources/ContinuousChapter.js in Resources */,
 				C11000000000000000000001 /* Localizable.strings in Resources */,
 				C11000000000000000000002 /* InfoPlist.strings in Resources */,
 				000000000000000000000061 /* SimpleReader/Resources/Assets.xcassets in Resources */,
@@ -369,6 +379,8 @@
 				A7C180000000000000000007 /* SimpleReader/Reader/ReaderPositionSession.swift in Sources */,
 				A7C180000000000000000009 /* SimpleReader/Reader/PDFReader.swift in Sources */,
 				000000000000000000000065 /* SimpleReader/Reader/ContinuousEPUBController.swift in Sources */,
+				A7C18000000000000000000D /* SimpleReader/Reader/ContinuousChapter.swift in Sources */,
+				A7C18000000000000000000F /* SimpleReader/Reader/ContinuousEPUBStyle.swift in Sources */,
 				A7C18000000000000000000B /* SimpleReader/Reader/ContinuousEPUBLayout.swift in Sources */,
 				000000000000000000000067 /* SimpleReader/Reader/ContinuousPublicationServer.swift in Sources */,
 				00000000000000000000002F /* SimpleReader/Services/BookHashing.swift in Sources */,
