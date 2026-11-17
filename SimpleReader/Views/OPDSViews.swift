@@ -1,20 +1,49 @@
 import Observation
 import SwiftUI
 
+private enum OPDSRoute: Hashable {
+    case catalog(serverID: UUID, url: URL)
+    case entry(EntrySelection)
+
+    struct EntrySelection: Hashable {
+        let server: OPDSServer
+        let entry: OPDSEntry
+
+        // Keep the tapped result with its route. Only its identity participates in path comparisons.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.server.id == rhs.server.id && lhs.entry.id == rhs.entry.id
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(server.id)
+            hasher.combine(entry.id)
+        }
+    }
+}
+
 struct ServersView: View {
     let environment: AppEnvironment
     @ObservedObject private var store: LibraryStore
+    @State private var path: [OPDSRoute] = []
     @State private var editing: OPDSServer?
     @State private var adding = false
     @State private var error: String?
     init(environment: AppEnvironment) { self.environment = environment; store = environment.store }
     var body: some View {
+        NavigationStack(path: $path) {
+            serverList.navigationDestination(for: OPDSRoute.self) { route in
+                destination(for: route)
+            }
+        }
+    }
+
+    private var serverList: some View {
         List {
             if store.settings.servers.isEmpty {
                 Section { Text("Enter your Calibre OPDS address, for example http://192.168.1.10:8080/opds.").foregroundColor(.secondary); Button("Add Server") { adding = true } }
             }
             ForEach(store.settings.servers) { server in
-                NavigationLink(destination: CatalogView(server: server, url: server.url, environment: environment)) {
+                NavigationLink(value: OPDSRoute.catalog(serverID: server.id, url: server.url)) {
                     VStack(alignment: .leading, spacing: 5) { Text(server.name); Text(server.url.absoluteString).font(.caption).foregroundColor(.secondary).lineLimit(1) }
                 }
                 .swipeActions { Button("Edit") { editing = server }.tint(.accentColor); Button(role: .destructive) { delete(server) } label: { Label("Delete", systemImage: "trash") } }
@@ -30,6 +59,20 @@ struct ServersView: View {
         .sheet(item: $editing) { ServerEditor(accounts: environment.accounts, server: $0) }
         .errorAlert($error)
     }
+
+    @ViewBuilder private func destination(for route: OPDSRoute) -> some View {
+        switch route {
+        case .catalog(let serverID, let url):
+            if let server = store.settings.servers.first(where: { $0.id == serverID }) {
+                CatalogView(server: server, url: url, environment: environment)
+            } else {
+                ContentUnavailableView("Couldn’t Complete Action", systemImage: "exclamationmark.circle")
+            }
+        case .entry(let selection):
+            EntryView(entry: selection.entry, server: selection.server, environment: environment)
+        }
+    }
+
     private func delete(_ server: OPDSServer) {
         do { try environment.accounts.deleteServer(server) }
         catch { self.error = error.localizedDescription }
@@ -159,10 +202,13 @@ struct CatalogView: View {
             }
             List {
                 ForEach(model.catalog?.entries ?? []) { entry in
-                    if let navigation = entry.navigation, entry.downloads.isEmpty {
-                        NavigationLink(destination: CatalogView(server: model.server, url: navigation.url, environment: environment)) { CatalogRow(entry: entry, model: model, http: environment.http) }
+                    let route: OPDSRoute = if let navigation = entry.navigation, entry.downloads.isEmpty {
+                        .catalog(serverID: model.server.id, url: navigation.url)
                     } else {
-                        NavigationLink(destination: EntryView(entry: entry, model: model, environment: environment)) { CatalogRow(entry: entry, model: model, http: environment.http) }
+                        .entry(.init(server: model.server, entry: entry))
+                    }
+                    NavigationLink(value: route) {
+                        CatalogRow(entry: entry, model: model, http: environment.http)
                     }
                 }
                 if let next = model.catalog?.next { Button("Load Next Page") { Task { await model.load(url: next, append: true) } }.disabled(model.loading) }
@@ -194,7 +240,7 @@ private struct CatalogRow: View {
 }
 struct EntryView: View {
     let entry: OPDSEntry
-    let model: CatalogModel
+    let server: OPDSServer
     let environment: AppEnvironment
     private var downloadLinks: [OPDSLink] {
         var seen = Set<OPDSLink>()
@@ -205,7 +251,7 @@ struct EntryView: View {
             Section { Text(entry.title).font(.title2); if !entry.author.isEmpty { Text(entry.author).foregroundColor(.secondary) }; if !entry.summary.isEmpty { Text(entry.summary) } }
             Section(header: Text("Download to This Device")) {
                 ForEach(downloadLinks, id: \.self) { link in
-                    EntryDownloadView(title: entry.title, link: link, model: model, environment: environment)
+                    EntryDownloadView(title: entry.title, link: link, server: server, environment: environment)
                 }
                 if entry.downloads.isEmpty { Text("No EPUB or PDF downloads available. DRM-protected books are unsupported.").foregroundColor(.secondary) }
             }
@@ -217,14 +263,14 @@ struct EntryView: View {
 private struct EntryDownloadView: View {
     let title: String
     let link: OPDSLink
-    let model: CatalogModel
+    let server: OPDSServer
     let environment: AppEnvironment
     @ObservedObject private var manager: DownloadManager
     @State private var reading: Book?
     @State private var error: String?
 
-    init(title: String, link: OPDSLink, model: CatalogModel, environment: AppEnvironment) {
-        self.title = title; self.link = link; self.model = model; self.environment = environment
+    init(title: String, link: OPDSLink, server: OPDSServer, environment: AppEnvironment) {
+        self.title = title; self.link = link; self.server = server; self.environment = environment
         manager = environment.downloads
     }
 
@@ -273,7 +319,7 @@ private struct EntryDownloadView: View {
 
     private var downloadButton: some View {
         Button {
-            do { manager.enqueue(title: title, link: link, credentials: try model.credentials()) }
+            do { manager.enqueue(title: title, link: link, credentials: try environment.accounts.credentials(for: server)) }
             catch { self.error = error.localizedDescription }
         } label: { Label("Download \(format)", systemImage: "arrow.down.circle") }
     }

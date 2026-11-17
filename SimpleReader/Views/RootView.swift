@@ -1,11 +1,13 @@
 import SwiftUI
 
 struct RootView: View {
+    private enum Tab: Hashable { case library, onlineLibrary, settings }
+
     let environment: AppEnvironment
     @ObservedObject private var sharedImports: SharedBookImportCoordinator
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedTab = 0
+    @State private var selectedTab = Tab.library
     init(environment: AppEnvironment) {
         self.environment = environment
         sharedImports = environment.sharedImports
@@ -14,7 +16,7 @@ struct RootView: View {
         content
             .onOpenURL { url in
                 guard url.isFileURL else { return }
-                selectedTab = 0
+                selectedTab = .library
                 sharedImports.receive(url)
             }
             .task { _ = sharedImports.recoverInbox() }
@@ -22,7 +24,7 @@ struct RootView: View {
                 if phase == .active { sharedImports.recoverInbox() }
             }
             .onChange(of: sharedImports.pendingCount) { _, count in
-                if count > 0 { selectedTab = 0 }
+                if count > 0 { selectedTab = .library }
             }
             .safeAreaInset(edge: .bottom) {
                 if sharedImports.pendingCount > 0 {
@@ -41,7 +43,7 @@ struct RootView: View {
             NavigationSplitView {
                 sidebar
             } detail: {
-                NavigationStack { selectedContent }
+                tabContent(selectedTab)
             }
             .navigationSplitViewStyle(.balanced)
             // iPadOS 17 can retain pushed destinations in the split view itself.
@@ -49,20 +51,20 @@ struct RootView: View {
             .id(selectedTab)
         } else {
             TabView(selection: $selectedTab) {
-                NavigationStack { LibraryView(environment: environment) }.tabItem { Label("Library", systemImage: "books.vertical") }.tag(0)
-                NavigationStack { ServersView(environment: environment) }.tabItem { Label("Online Library", systemImage: "network") }.tag(1)
-                NavigationStack { SettingsView(environment: environment) }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
+                tabContent(.library).tabItem { Label("Library", systemImage: "books.vertical") }.tag(Tab.library)
+                tabContent(.onlineLibrary).tabItem { Label("Online Library", systemImage: "network") }.tag(Tab.onlineLibrary)
+                tabContent(.settings).tabItem { Label("Settings", systemImage: "gearshape") }.tag(Tab.settings)
             }
         }
     }
     private var sidebar: some View {
         List {
-            sidebarButton("Library", systemImage: "books.vertical", tab: 0)
-            sidebarButton("Online Library", systemImage: "network", tab: 1)
-            sidebarButton("Settings", systemImage: "gearshape", tab: 2)
+            sidebarButton("Library", systemImage: "books.vertical", tab: .library)
+            sidebarButton("Online Library", systemImage: "network", tab: .onlineLibrary)
+            sidebarButton("Settings", systemImage: "gearshape", tab: .settings)
         }.listStyle(.sidebar).navigationTitle("Simple Reader")
     }
-    private func sidebarButton(_ title: LocalizedStringKey, systemImage: String, tab: Int) -> some View {
+    private func sidebarButton(_ title: LocalizedStringKey, systemImage: String, tab: Tab) -> some View {
         Button { selectedTab = tab } label: {
             Label(title, systemImage: systemImage).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -70,11 +72,11 @@ struct RootView: View {
         .listRowBackground(selectedTab == tab ? Color.accentColor.opacity(0.12) : Color.clear)
         .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
     }
-    @ViewBuilder private var selectedContent: some View {
-        switch selectedTab {
-        case 1: ServersView(environment: environment)
-        case 2: SettingsView(environment: environment)
-        default: LibraryView(environment: environment)
+    @ViewBuilder private func tabContent(_ tab: Tab) -> some View {
+        switch tab {
+        case .library: NavigationStack { LibraryView(environment: environment) }
+        case .onlineLibrary: ServersView(environment: environment)
+        case .settings: NavigationStack { SettingsView(environment: environment) }
         }
     }
 }
