@@ -264,7 +264,8 @@ struct SyncPrompt: Identifiable {
             config: .init(preferences: preferences(), fontFamilyDeclarations: try ReaderFonts.declarations()))
         navigator.delegate = self
         epub = navigator
-        container.replaceChild(with: navigator)
+        container.replaceChild(with: navigator,
+            pageTurnSurface: ReadiumPageTurnSurface(content: navigator.view, viewport: container.view))
     }
     private func protectPosition() {
         let turnOrigin = pdfPageTurnOrigin.flatMap { origin in

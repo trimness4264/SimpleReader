@@ -49,6 +49,40 @@ import PDFKit
         await session.close()
     }
 
+    func testCompletedEPUBGesturePersistsSettledPositionAndUnlocksReader() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: epubFile())
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let window = present(session.container)
+        // Readium needs a scene to render the page confirmed after the gesture.
+        window.windowScene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        window.makeKeyAndVisible()
+        session.container.view.layoutIfNeeded()
+        defer { window.isHidden = true }
+        await session.load()
+        XCTAssertTrue(session.ready, session.error ?? "Reader not ready")
+        let initial = try XCTUnwrap(store.book(book.id)?.position?.xpointer)
+        let translation = CGPoint(x: -window.bounds.width * 0.7, y: 0)
+
+        XCTAssertTrue(session.container.beginPageTurn(translation: translation))
+        session.container.updatePageTurn(translation: translation)
+        session.container.finishPageTurn(translation: translation, velocity: CGPoint(x: -900, y: 0))
+        let deadline = ContinuousClock.now + .seconds(10)
+        while session.container.isTurningPage && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        XCTAssertFalse(session.container.isTurningPage)
+        XCTAssertTrue(session.container.view.isUserInteractionEnabled)
+        XCTAssertNil(session.error)
+        let settled = try XCTUnwrap(store.book(book.id)?.position?.xpointer)
+        XCTAssertNotEqual(settled, initial)
+        XCTAssertEqual(store.book(book.id)?.pendingSync, true)
+        await session.close()
+    }
+
     func testPDFTwoPageLayoutKeepsTheSelectedPageAtTheReadableTop() async throws {
         let controller = UIViewController()
         let window = present(controller)

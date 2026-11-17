@@ -1,6 +1,5 @@
 import UIKit
 import PDFKit
-import WebKit
 
 @MainActor protocol ReaderPageTurnDelegate: AnyObject {
     func canBeginPageTurn(isGesture: Bool) -> Bool
@@ -35,18 +34,7 @@ private final class ReaderContainerView: UIView {
     private var pageSnapshot: UIView?
     private var pageContent: UIView?
     private var committedPreview = false
-    private struct PageDrag {
-        let webView: WKWebView
-        let pageOrigin: CGPoint
-        let chapterScroll: UIScrollView?
-        let chapterOrigin: CGPoint
-        var scroll: UIScrollView?
-        var origin: CGPoint
-        var destination: CGPoint
-        var crossesChapter = false
-    }
-    private var pageDrag: PageDrag?
-    private let registeredPans = NSHashTable<UIPanGestureRecognizer>.weakObjects()
+    private var pageTurnSurface: ReadiumPageTurnSurface?
     var onLayout: ((CGSize, UIUserInterfaceIdiom) -> Void)?
     var onLayoutWillChange: (() -> Void)?
     var onLayoutDidChange: (() -> Void)?
@@ -81,35 +69,13 @@ private final class ReaderContainerView: UIView {
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard gestureRecognizer === pageTurnPan, pageTurnDelegate?.canBeginPageTurn(isGesture: true) == true else { return false }
-        if let content = children.first?.view { registerPagePans(in: content) }
+        pageTurnSurface?.registerNativePans(requiringToFail: pageTurnPan)
         return true
-    }
-
-    private func registerPagePans(in content: UIView) {
-        if let scroll = content as? UIScrollView {
-            let pan = scroll.panGestureRecognizer
-            if !registeredPans.contains(pan) {
-                registeredPans.add(pan)
-                pan.require(toFail: pageTurnPan)
-            }
-        }
-        for child in content.subviews { registerPagePans(in: child) }
     }
 
     func beginPageTurn(translation: CGPoint) -> Bool {
         guard abs(translation.x) > abs(translation.y), beginTurn(isGesture: true) else { return false }
-        if let web = visibleWebView(in: children.first?.view ?? view) {
-            var ancestor = web.superview
-            var chapter: UIScrollView?
-            while let parent = ancestor, parent !== view {
-                if let scroll = parent as? UIScrollView { chapter = scroll; break }
-                ancestor = parent.superview
-            }
-            let origin = web.scrollView.contentOffset
-            pageDrag = PageDrag(webView: web, pageOrigin: origin, chapterScroll: chapter,
-                                chapterOrigin: chapter?.contentOffset ?? .zero,
-                                origin: origin, destination: origin)
-        }
+        pageTurnSurface?.beginDrag()
         return true
     }
 
@@ -139,37 +105,39 @@ private final class ReaderContainerView: UIView {
         updatePageTurn(translation: translation)
         view.isUserInteractionEnabled = false
         let revision = pageTransitionRevision
-        guard let drag = pageDrag else {
-            Task { [weak self] in
-                guard let self = self, revision == self.pageTransitionRevision else { return }
-                if commit { await self.performPageTurn(towardLeft: projected < 0, revision: revision) }
-                else { await self.completePageTurn(committed: false, revision: revision) }
-            }
-            return
-        }
+        let surface = pageTurnSurface
         Task { [weak self] in
-            guard let self = self, revision == self.pageTransitionRevision else { return }
-            let target = commit ? drag.destination : drag.origin
-            await self.settlePageDrag(drag, target: target, velocity: velocity.x)
-            guard revision == self.pageTransitionRevision else { return }
-            if commit, drag.scroll != nil, drag.crossesChapter,
-               let content = self.children.first?.view,
-               let snapshot = content.snapshotView(afterScreenUpdates: false) {
-                snapshot.frame = content.convert(content.bounds, to: self.view)
-                snapshot.isUserInteractionEnabled = true
-                self.view.addSubview(snapshot)
-                self.pageSnapshot = snapshot
-                self.pageContent = content
-                self.committedPreview = true
-                drag.chapterScroll?.setContentOffset(drag.chapterOrigin, animated: false)
-            }
-            if commit && (drag.crossesChapter || drag.scroll == nil && drag.destination != drag.origin) {
-                self.pageDrag = nil
-                await self.performPageTurn(towardLeft: projected < 0, revision: revision)
+            guard let self, revision == self.pageTransitionRevision else { return }
+            let completion: ReadiumPageTurnSurface.Completion
+            if let surface {
+                completion = await surface.finishDrag(commit: commit, velocity: velocity.x, isCurrent: {
+                    revision == self.pageTransitionRevision && self.pageTurnSurface === surface
+                }, capturePreview: {
+                    self.captureCommittedPreview()
+                })
             } else {
-                await self.completePageTurn(committed: commit && drag.scroll != nil, revision: revision)
+                completion = commit ? .navigate : .complete(committed: false)
+            }
+            guard revision == self.pageTransitionRevision else { return }
+            switch completion {
+            case .navigate:
+                await self.performPageTurn(towardLeft: projected < 0, revision: revision)
+            case .complete(let committed):
+                await self.completePageTurn(committed: committed, revision: revision)
             }
         }
+    }
+
+    private func captureCommittedPreview() -> Bool {
+        guard let content = children.first?.view,
+              let snapshot = content.snapshotView(afterScreenUpdates: false) else { return false }
+        snapshot.frame = content.convert(content.bounds, to: view)
+        snapshot.isUserInteractionEnabled = true
+        view.addSubview(snapshot)
+        pageSnapshot = snapshot
+        pageContent = content
+        committedPreview = true
+        return true
     }
 
     /// Buttons and gestures share the same begin, completion, and cancellation ownership.
@@ -195,7 +163,11 @@ private final class ReaderContainerView: UIView {
                 guard revision == self.pageTransitionRevision,
                       try await self.pageTurnDelegate?.movePage(towardLeft: towardLeft) == true,
                       revision == self.pageTransitionRevision else { return false }
-                if !self.children.isEmpty { try await self.waitForEPUBContent() }
+                if let surface = self.pageTurnSurface {
+                    try await surface.waitForContent {
+                        revision == self.pageTransitionRevision && self.pageTurnSurface === surface
+                    }
+                }
                 return revision == self.pageTransitionRevision
             } catch is CancellationError {
                 return false
@@ -212,107 +184,20 @@ private final class ReaderContainerView: UIView {
         // Do not unlock native pans until the settled position has been captured.
         await pageTurnDelegate?.pageTurnDidFinish(committed: committed, error: error)
         guard revision == pageTransitionRevision else { return }
-        pageDrag = nil
+        pageTurnSurface?.endDrag()
         clearPageAnimation()
         view.isUserInteractionEnabled = true
         isTurningPage = false
     }
 
     func updatePageTurn(translation: CGPoint) {
-        guard var drag = pageDrag else { return }
-        let direction: CGFloat = translation.x < 0 ? 1 : -1
-        let page = drag.webView.scrollView
-        let destination = CGPoint(x: drag.pageOrigin.x + direction * page.bounds.width, y: drag.pageOrigin.y)
-        page.setContentOffset(drag.pageOrigin, animated: false)
-        drag.chapterScroll?.setContentOffset(drag.chapterOrigin, animated: false)
-        pageContent?.transform = .identity
-        if canDisplay(offset: destination, in: page) {
-            drag.scroll = page
-            drag.origin = drag.pageOrigin
-            drag.destination = destination
-            drag.crossesChapter = false
-        } else if let chapter = drag.chapterScroll {
-            let next = CGPoint(x: drag.chapterOrigin.x + direction * chapter.bounds.width, y: drag.chapterOrigin.y)
-            drag.scroll = canDisplay(offset: next, in: chapter) && hasLoadedChapter(at: next, in: chapter) ? chapter : nil
-            drag.origin = drag.chapterOrigin
-            drag.destination = canDisplay(offset: next, in: chapter) ? next : drag.origin
-            drag.crossesChapter = drag.scroll != nil
-        } else {
-            drag.scroll = nil
-            drag.origin = drag.pageOrigin
-            drag.destination = drag.origin
-        }
-        if let scroll = drag.scroll {
-            let width = scroll.bounds.width
-            let distance = min(abs(translation.x), width)
-            scroll.setContentOffset(CGPoint(x: drag.origin.x + direction * distance, y: drag.origin.y), animated: false)
-        } else if let content = children.first?.view, !UIAccessibility.isReduceMotionEnabled {
-            pageContent = content
-            let resistance = translation.x / (1 + abs(translation.x) / 36)
-            content.transform = CGAffineTransform(translationX: resistance, y: 0)
-        }
-        pageDrag = drag
-    }
-
-    private func canDisplay(offset: CGPoint, in scroll: UIScrollView) -> Bool {
-        offset.x >= -scroll.adjustedContentInset.left - 1
-            && offset.x <= scroll.contentSize.width - scroll.bounds.width + scroll.adjustedContentInset.right + 1
-    }
-
-    private func visibleWebView(in content: UIView) -> WKWebView? {
-        guard !content.isHidden, content.alpha > 0.99 else { return nil }
-        if let web = content as? WKWebView {
-            let visible = web.convert(web.bounds, to: view).intersection(view.bounds)
-            return visible.width > view.bounds.width / 2 && visible.height > view.bounds.height / 2 ? web : nil
-        }
-        return content.subviews.lazy.compactMap { self.visibleWebView(in: $0) }.first
-    }
-
-    private func hasLoadedChapter(at offset: CGPoint, in scroll: UIScrollView) -> Bool {
-        let target = CGRect(origin: offset, size: scroll.bounds.size)
-        func loaded(in content: UIView) -> Bool {
-            guard !content.isHidden, content.alpha > 0.99 else { return false }
-            if let web = content as? WKWebView {
-                let overlap = web.convert(web.bounds, to: scroll).intersection(target)
-                return overlap.width > target.width / 2 && web.scrollView.alpha > 0.99 && !web.isLoading
-            }
-            return content.subviews.contains { loaded(in: $0) }
-        }
-        return scroll.subviews.contains { loaded(in: $0) }
-    }
-
-    private func settlePageDrag(_ drag: PageDrag, target: CGPoint, velocity: CGFloat) async {
-        let revision = pageTransitionRevision
-        let origin = drag.scroll?.contentOffset ?? drag.origin
-        let transform = pageContent?.transform ?? .identity
-        let distance = abs(origin.x - target.x)
-        let duration = min(0.4, max(0.16, distance / max(abs(velocity), 900)))
-        let start = CACurrentMediaTime()
-        // Update WebKit's actual scroll offsets on each frame so the DOM and
-        // visible page agree before the settled text position is captured.
-        while revision == pageTransitionRevision {
-            let progress = UIAccessibility.isReduceMotionEnabled ? 1 : min(1, (CACurrentMediaTime() - start) / duration)
-            let fraction = CGFloat(1 - pow(1 - progress, 3))
-            UIView.performWithoutAnimation {
-                drag.scroll?.setContentOffset(CGPoint(x: origin.x + (target.x - origin.x) * fraction,
-                                                      y: origin.y + (target.y - origin.y) * fraction), animated: false)
-                self.pageContent?.transform = CGAffineTransform(translationX: transform.tx * (1 - fraction),
-                                                               y: transform.ty * (1 - fraction))
-            }
-            if progress >= 1 { return }
-            do { try await Task.sleep(nanoseconds: 16_000_000) }
-            catch { return }
-        }
+        pageTurnSurface?.updateDrag(translation: translation)
     }
 
     func cancelPageTransition() {
         pageTransitionRevision += 1
         clearPageAnimation()
-        if let drag = pageDrag {
-            drag.webView.scrollView.setContentOffset(drag.pageOrigin, animated: false)
-            drag.chapterScroll?.setContentOffset(drag.chapterOrigin, animated: false)
-        }
-        pageDrag = nil
+        pageTurnSurface?.cancelDrag()
         if isTurningPage { view.isUserInteractionEnabled = true }
         isTurningPage = false
     }
@@ -329,28 +214,6 @@ private final class ReaderContainerView: UIView {
         committedPreview = false
         pageSnapshot = nil
         pageContent = nil
-    }
-
-    private func waitForEPUBContent() async throws {
-        let revision = pageTransitionRevision
-        // Readium resumes navigation before unhiding a cold chapter's scroll view.
-        // Observe UIKit visibility instead of guessing a rendering delay.
-        for _ in 0..<120 {
-            guard revision == pageTransitionRevision, view.window != nil else { throw CancellationError() }
-            if children.first.map({ hasVisibleEPUBContent(in: $0.view) }) == true { return }
-            try await Task.sleep(nanoseconds: 16_000_000)
-        }
-        throw NSError(domain: "Reader", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "Chapter content isn’t visible yet. Try again.")])
-    }
-
-    private func hasVisibleEPUBContent(in content: UIView) -> Bool {
-        guard !content.isHidden, content.alpha > 0.99 else { return false }
-        if let webView = content as? WKWebView {
-            let visible = webView.convert(webView.bounds, to: view).intersection(view.bounds)
-            return visible.width > view.bounds.width / 2 && visible.height > view.bounds.height / 2
-                && webView.scrollView.alpha > 0.99
-        }
-        return content.subviews.contains { hasVisibleEPUBContent(in: $0) }
     }
 
     private func animatePageTurn(direction: CGFloat, navigate: () async -> Bool) async -> Bool {
@@ -435,9 +298,9 @@ private final class ReaderContainerView: UIView {
         appeared = false
         super.viewWillDisappear(animated)
     }
-    func replaceChild(with child: UIViewController) {
+    func replaceChild(with child: UIViewController, pageTurnSurface: ReadiumPageTurnSurface? = nil) {
         cancelPageTransition()
-        registeredPans.removeAllObjects()
+        self.pageTurnSurface = pageTurnSurface
         for previous in children {
             previous.willMove(toParent: nil)
             if appeared { previous.beginAppearanceTransition(false, animated: false) }
