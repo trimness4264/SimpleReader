@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 
 struct ServersView: View {
@@ -74,17 +75,17 @@ struct ServerEditor: View {
     }
 }
 
-@MainActor final class CatalogModel: ObservableObject {
-    @Published var catalog: OPDSCatalog?
-    @Published var loading = false
-    @Published var error: String?
-    @Published var query = ""
+@Observable @MainActor final class CatalogModel {
+    private(set) var catalog: OPDSCatalog?
+    private(set) var loading = false
+    var error: String?
+    var query = ""
     let server: OPDSServer
-    let initialURL: URL
-    let client: OPDSClient
+    private let initialURL: URL
+    private let client: OPDSClient
     private let accounts: AccountSettings
     private var searchLink: OPDSLink?
-    private var visited: Set<URL> = []
+    @ObservationIgnored private var visited: Set<URL> = []
     init(server: OPDSServer, url: URL, client: OPDSClient, accounts: AccountSettings) {
         self.server = server; initialURL = url; self.client = client; self.accounts = accounts
     }
@@ -111,15 +112,50 @@ struct ServerEditor: View {
     }
 }
 struct CatalogView: View {
-    let environment: AppEnvironment
-    @StateObject private var model: CatalogModel
+    private let server: OPDSServer
+    private let url: URL
+    private let environment: AppEnvironment
+    @State private var model: CatalogModel?
+
     init(server: OPDSServer, url: URL, environment: AppEnvironment) {
-        self.environment = environment; _model = StateObject(wrappedValue: CatalogModel(server: server, url: url, client: environment.opds, accounts: environment.accounts))
+        self.server = server
+        self.url = url
+        self.environment = environment
     }
+
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack {
+            if let model {
+                catalogContent(model)
+            } else {
+                ProgressView("Loading…")
+            }
+        }
+        .navigationTitle(model?.catalog?.title ?? server.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, environment: environment, alwaysVisible: true) } }
+        .task {
+            // Create the model when this destination appears, once per page identity.
+            if model == nil {
+                model = CatalogModel(server: server, url: url, client: environment.opds, accounts: environment.accounts)
+            }
+            if let model, model.catalog == nil { await model.load() }
+        }
+    }
+
+    private func catalogContent(_ catalogModel: CatalogModel) -> some View {
+        @Bindable var model = catalogModel
+        return VStack(spacing: 0) {
             if model.canSearch {
-                HStack { TextField("Search library", text: $model.query).submitLabel(.search).onSubmit { Task { await model.search() } }; Button("Search") { Task { await model.search() } }.disabled(model.loading) }.padding().background(Color(UIColor.secondarySystemBackground))
+                HStack {
+                    TextField("Search library", text: $model.query)
+                        .submitLabel(.search)
+                        .onSubmit { Task { await model.search() } }
+                    Button("Search") { Task { await model.search() } }
+                        .disabled(model.loading)
+                }
+                .padding()
+                .background(Color(uiColor: .secondarySystemBackground))
             }
             List {
                 ForEach(model.catalog?.entries ?? []) { entry in
@@ -134,9 +170,8 @@ struct CatalogView: View {
                 if !model.loading && model.catalog?.entries.isEmpty == true { Text("This catalog has no books").foregroundColor(.secondary) }
                 if model.catalog == nil && !model.loading { Button("Reload") { Task { await model.load() } } }
             }
-        }.navigationTitle(model.catalog?.title ?? model.server.name).navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, environment: environment, alwaysVisible: true) } }
-        .task { if model.catalog == nil { await model.load() } }.errorAlert($model.error)
+        }
+        .errorAlert($model.error)
     }
 }
 private struct CatalogRow: View {
