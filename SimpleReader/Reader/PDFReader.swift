@@ -17,6 +17,8 @@ import UIKit
     private var twoPages: Bool
     private var isApplyingPosition = false
     private var unsettledMoves = 0
+    private var navigationRevision = 0
+    private var confirmedPage: (index: Int, offset: CGPoint)?
     private var isReady = false
     var onMovementBegan: (() -> Void)?
     var onPageChanged: ((ReadingPosition) -> Void)?
@@ -55,6 +57,15 @@ import UIKit
         return scroll.isDragging || scroll.isDecelerating
     }
     var page: Int? {
+        // PDFKit reports the left page of a spread, or the page at the viewport's
+        // midpoint. Keep an explicitly selected visible page until the viewport moves.
+        if let confirmed = confirmedPage, let scroll = scrollView,
+           abs(scroll.contentOffset.x - confirmed.offset.x) < 1,
+           abs(scroll.contentOffset.y - confirmed.offset.y) < 1,
+           let selected = document.page(at: confirmed.index),
+           view.visiblePages.contains(where: { $0 === selected }) {
+            return confirmed.index
+        }
         guard let current = view.currentPage else { return nil }
         let index = document.index(for: current)
         return (0..<pageCount).contains(index) ? index : nil
@@ -79,31 +90,20 @@ import UIKit
         page.map { ReadingPosition(progression: Double($0 + 1) / Double(pageCount), pdfPage: $0, updatedAt: updatedAt) }
     }
 
-    func open(at index: Int?, updatedAt: Date) async throws -> ReadingPosition {
-        // PDFKit ignores page navigation before the reader has a viewport.
-        for _ in 0..<50 {
-            try Task.checkCancellation()
-            if view.window != nil && !view.bounds.isEmpty { break }
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        guard view.window != nil, !view.bounds.isEmpty else {
-            throw AppFailure("The PDF layout isn’t ready. Reopen the book.")
-        }
-        view.superview?.layoutIfNeeded()
-        view.layoutIfNeeded()
-        updateScrollInsets(insets)
-        if let index = index { try go(to: min(max(index, 0), pageCount - 1)) }
-        guard let position = position(updatedAt: updatedAt) else {
-            throw AppFailure("Couldn’t restore the PDF reading position.")
-        }
+    func open(at index: Int?, updatedAt: Date,
+              isCurrent: @MainActor () -> Bool = { true }) async throws -> ReadingPosition {
+        var position = try await move(to: .page(min(max(index ?? 0, 0), pageCount - 1)), isCurrent: isCurrent)
+        try check(isCurrent)
+        position.updatedAt = updatedAt
         isReady = true
         return position
     }
 
     func updateLayout(twoPages: Bool) {
         if self.twoPages != twoPages {
+            let current = page.flatMap { document.page(at: $0) }
+            confirmedPage = nil
             self.twoPages = twoPages
-            let current = view.currentPage
             applyingPosition {
                 view.displayMode = twoPages ? .twoUpContinuous : .singlePageContinuous
                 view.autoScales = true
@@ -149,16 +149,93 @@ import UIKit
         return Checkpoint(page: index, point: point)
     }
 
-    func move(to target: Target) async throws -> ReadingPosition {
+    func move(to target: Target, isCurrent: @MainActor () -> Bool = { true }) async throws -> ReadingPosition {
+        try check(isCurrent)
+        navigationRevision += 1
+        let revision = navigationRevision
         unsettledMoves += 1
         defer { unsettledMoves -= 1 }
+        func ownsMove() -> Bool { isCurrent() && navigationRevision == revision }
+        let deadline = ContinuousClock.now + .seconds(5)
+        // PDFKit ignores navigation before the reader has a viewport.
+        while view.window == nil || view.bounds.isEmpty {
+            try check(ownsMove)
+            guard ContinuousClock.now < deadline else {
+                throw AppFailure("The PDF layout isn’t ready. Reopen the book.")
+            }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        try check(ownsMove)
+        view.superview?.layoutIfNeeded()
+        view.layoutIfNeeded()
+        updateScrollInsets(insets)
+        try check(ownsMove)
+        let index: Int
+        switch target {
+        case .page(let page): index = page
+        case .checkpoint(let checkpoint): index = checkpoint.page
+        }
+        guard let page = document.page(at: index) else {
+            throw AppFailure("Page number outside this book’s range.")
+        }
+        confirmedPage = nil
+        try apply(target)
+        var previous: LayoutSnapshot?
+        while ContinuousClock.now < deadline {
+            try check(ownsMove)
+            guard view.window != nil else { throw CancellationError() }
+            view.layoutIfNeeded()
+            if let snapshot = confirmation(of: target, on: page) {
+                // A subsequent layout pass must still agree before committing.
+                if previous == snapshot {
+                    confirmedPage = (index, snapshot.offset)
+                    return ReadingPosition(progression: Double(index + 1) / Double(pageCount), pdfPage: index, updatedAt: Date())
+                }
+                previous = snapshot
+            } else {
+                previous = nil
+                try apply(target)
+            }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        try check(ownsMove)
+        throw AppFailure("Couldn’t restore the PDF reading position.")
+    }
+
+    private struct LayoutSnapshot: Equatable {
+        let offset: CGPoint
+        let contentSize: CGSize
+        let viewport: CGRect
+        let insets: UIEdgeInsets
+        let scale: CGFloat
+        let pageFrame: CGRect
+    }
+
+    private func confirmation(of target: Target, on page: PDFPage) -> LayoutSnapshot? {
+        guard view.visiblePages.contains(where: { $0 === page }), let scroll = scrollView else { return nil }
+        let y: CGFloat
+        switch target {
+        case .page: y = view.convert(page.bounds(for: view.displayBox), from: page).minY
+        case .checkpoint(let checkpoint): y = view.convert(checkpoint.point, from: page).y
+        }
+        let top = view.bounds.minY + scroll.adjustedContentInset.top
+        let expected = clampedOffset(scroll.contentOffset.y + y - top, in: scroll)
+        guard abs(scroll.contentOffset.y - expected) < 1 else { return nil }
+        return LayoutSnapshot(offset: scroll.contentOffset, contentSize: scroll.contentSize,
+            viewport: view.bounds, insets: scroll.adjustedContentInset, scale: view.scaleFactor,
+            pageFrame: view.convert(page.bounds(for: view.displayBox), from: page))
+    }
+
+    private func check(_ isCurrent: @MainActor () -> Bool) throws {
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
+    }
+
+    private func apply(_ target: Target) throws {
         switch target {
         case .page(let index): try go(to: index)
         case .checkpoint(let checkpoint): try restore(checkpoint)
         }
-        try await Task.sleep(nanoseconds: 500_000_000)
-        guard let position = position() else { throw AppFailure("Couldn’t restore the PDF reading position.") }
-        return position
     }
 
     private func restore(_ checkpoint: Checkpoint) throws {
@@ -179,14 +256,15 @@ import UIKit
         applyingPosition { alignTop(of: page) }
     }
 
-    func turn(forward: Bool) throws -> Bool {
+    func turn(forward: Bool, isCurrent: @MainActor () -> Bool = { true }) async throws -> Bool {
+        try check(isCurrent)
         guard let page = page else { return false }
         // Without a cover, spreads start at zero-based pages 0, 2, 4.
         let start = twoPages ? page / 2 * 2 : page
         let step = twoPages ? 2 : 1
         let index = start + (forward ? step : -step)
         guard (0..<pageCount).contains(index) else { return false }
-        try go(to: index)
+        _ = try await move(to: .page(index), isCurrent: isCurrent)
         return true
     }
 
@@ -218,10 +296,14 @@ import UIKit
     }
 
     private func setOffset(_ y: CGFloat, in scroll: UIScrollView) {
+        let offset = clampedOffset(y, in: scroll)
+        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: offset), animated: false)
+    }
+
+    private func clampedOffset(_ y: CGFloat, in scroll: UIScrollView) -> CGFloat {
         let inset = scroll.adjustedContentInset
         let bottom = scroll.contentSize.height - scroll.bounds.height + inset.bottom
-        let offset = max(-inset.top, min(y, bottom))
-        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: offset), animated: false)
+        return max(-inset.top, min(y, bottom))
     }
 
     private func applyingPosition(_ update: () -> Void) {
@@ -237,7 +319,11 @@ import UIKit
     }
 
     @objc private func panChanged(_ gesture: UIPanGestureRecognizer) {
-        if isReady, gesture.state == .began { onMovementBegan?() }
+        if isReady, gesture.state == .began {
+            confirmedPage = nil
+            navigationRevision += 1
+            onMovementBegan?()
+        }
     }
 }
 

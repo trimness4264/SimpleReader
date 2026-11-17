@@ -47,6 +47,7 @@ struct SyncPrompt: Identifiable {
         return epub
     }
     private var pdf: PDFReader?
+    private var pdfPageTurnOrigin: (revision: Int, reader: PDFReader, checkpoint: Checkpoint)?
     private var scrollInsets: UIEdgeInsets?
     private var loading = false
     private var busySync = false
@@ -180,7 +181,9 @@ struct SyncPrompt: Identifiable {
             position = try await epubPosition.initialPosition(in: navigator, updatedAt: updatedAt)
             guard activeEPUB === navigator, !closed, !Task.isCancelled else { throw CancellationError() }
         } else if let pdf = pdf {
-            position = try await pdf.open(at: positions.current?.pdfPage, updatedAt: updatedAt)
+            position = try await pdf.open(at: positions.current?.pdfPage, updatedAt: updatedAt) {
+                self.pdf === pdf && !self.closed && !Task.isCancelled
+            }
             guard self.pdf === pdf, !closed, !Task.isCancelled else { throw CancellationError() }
         }
         if let position = position {
@@ -264,10 +267,14 @@ struct SyncPrompt: Identifiable {
         container.replaceChild(with: navigator)
     }
     private func protectPosition() {
+        let turnOrigin = pdfPageTurnOrigin.flatMap { origin in
+            origin.revision == positions.revision && pdf === origin.reader ? origin.checkpoint : nil
+        }
+        pdfPageTurnOrigin = nil
         container.cancelPageTransition()
         guard ready, !closed else { return }
         savePendingLocation()
-        positions.protect(Checkpoint(position: positions.current, locator: positions.latestLocator,
+        positions.protect(turnOrigin ?? Checkpoint(position: positions.current, locator: positions.latestLocator,
             pdf: pdf?.checkpoint(at: positions.current?.pdfPage)))
         continuous?.cancelNavigation()
     }
@@ -309,7 +316,9 @@ struct SyncPrompt: Identifiable {
                 self.isCurrent(revision) && self.activeEPUB === navigator
             }
         } else if let saved = checkpoint.pdf, let pdf = pdf {
-            _ = try await pdf.move(to: .checkpoint(saved))
+            _ = try await pdf.move(to: .checkpoint(saved)) {
+                self.isCurrent(revision) && self.pdf === pdf
+            }
         }
         guard isCurrent(revision) else { throw CancellationError() }
         if let navigator = activeEPUB, let epubPosition = epubPosition, let locator = navigator.currentLocation,
@@ -334,7 +343,17 @@ struct SyncPrompt: Identifiable {
         if let error = error { self.error = error.localizedDescription }
         guard ready, isActive, positions.activity == .idle, !closed else { return }
         if let pdf = pdf {
-            if committed, let position = pdf.position() { pdfChanged(position) }
+            guard let origin = pdfPageTurnOrigin,
+                  origin.revision == positions.revision, origin.reader === pdf else { return }
+            if committed, let position = pdf.position() {
+                pdfPageTurnOrigin = nil
+                pdfChanged(position)
+            } else {
+                // Navigation may already have moved PDFKit before cancellation or
+                // a failed confirmation. Restore the captured origin before unlocking.
+                protectPosition()
+                await scheduleRestoration()?.value
+            }
             return
         }
         guard let navigator = epub, let epubPosition = epubPosition else { return }
@@ -401,6 +420,7 @@ struct SyncPrompt: Identifiable {
         }
     }
     func close() async {
+        pdfPageTurnOrigin = nil
         container.cancelPageTransition()
         positions.movementBegan()
         await flush()
@@ -411,12 +431,16 @@ struct SyncPrompt: Identifiable {
     }
     func resignActive() {
         guard !closed else { return }
+        let interruptedPDFTurn = container.isTurningPage && pdfPageTurnOrigin.map {
+            $0.revision == positions.revision && pdf === $0.reader
+        } == true
         isActive = false
-        container.cancelPageTransition()
-        if isNavigating {
+        if isNavigating || interruptedPDFTurn {
             // An interrupted navigation still needs to return to its original position.
             protectPosition()
         } else {
+            pdfPageTurnOrigin = nil
+            container.cancelPageTransition()
             // A live reader keeps its page when the app is merely interrupted.
             positions.invalidate()
             savePendingLocation()
@@ -459,6 +483,10 @@ struct SyncPrompt: Identifiable {
 
     func pageTurnWillBegin() {
         positions.invalidate()
+        if let pdf = pdf {
+            pdfPageTurnOrigin = (positions.revision, pdf,
+                Checkpoint(position: positions.current, locator: nil, pdf: pdf.checkpoint(at: nil)))
+        }
     }
 
     func movePage(towardLeft: Bool) async throws -> Bool {
@@ -472,7 +500,10 @@ struct SyncPrompt: Identifiable {
             }
             return moved
         }
-        return try pdf?.turn(forward: towardLeft) ?? false
+        guard let pdf = pdf else { return false }
+        return try await pdf.turn(forward: towardLeft) {
+            self.isCurrent(revision) && self.pdf === pdf
+        }
     }
 
     func go(_ item: ContentsItem) async {
@@ -525,10 +556,10 @@ struct SyncPrompt: Identifiable {
         } else if let pdf = pdf {
             switch target {
             case .page(let index):
-                return try await pdf.move(to: .page(index))
+                return try await pdf.move(to: .page(index)) { isCurrent() && self.pdf === pdf }
             case .checkpoint(let saved):
                 guard let checkpoint = saved.pdf else { throw AppFailure("Couldn’t return to the previous position.") }
-                return try await pdf.move(to: .checkpoint(checkpoint))
+                return try await pdf.move(to: .checkpoint(checkpoint)) { isCurrent() && self.pdf === pdf }
             default: throw AppFailure("Couldn’t jump to the selected position.")
             }
         }
@@ -677,7 +708,7 @@ struct SyncPrompt: Identifiable {
                 guard let raw = remote.progress, let page = Int(raw), let pdf = pdf, (1...pdf.pageCount).contains(page) else {
                     throw AppFailure("The remote PDF page number is outside this book’s range.")
                 }
-                let position = try await pdf.move(to: .page(page - 1))
+                let position = try await pdf.move(to: .page(page - 1)) { isCurrent() && self.pdf === pdf }
                 guard isCurrent() else { throw CancellationError() }
                 try commit(position, from: .remote(remote))
             }
