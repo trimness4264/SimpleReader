@@ -21,6 +21,36 @@ def vphone(*args):
     return json.loads(subprocess.check_output([VPHONE, *args]))
 
 
+def ensure_xctest_service(ios, options, result):
+    def service_available():
+        services = subprocess.check_output([ios, "rsd", "ls", *options], timeout=10)
+        return "com.apple.dt.testmanagerd.remote" in json.loads(services)
+
+    if service_available():
+        return
+
+    image = Path("/Library/Developer/DeveloperDiskImages/iOS_DDI/Restore")
+    if (image / "BuildManifest.plist").is_file():
+        mount = ["image", "mount", f"--path={image}"]
+    else:
+        mount = ["image", "auto", f"--basedir={BUILD / 'vphone-developer-images'}"]
+
+    image_log = result / "image.log"
+    print(f"Mounting developer disk image for XCTest. See {image_log}", flush=True)
+    with image_log.open("w") as output:
+        try:
+            subprocess.run([ios, *mount, *options], stdout=output, stderr=subprocess.STDOUT,
+                           timeout=120, check=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise SystemExit(f"Could not mount the developer disk image. See {image_log}") from error
+
+    for _ in range(10):
+        if service_available():
+            return
+        time.sleep(1)
+    raise SystemExit(f"testmanagerd is still unavailable. See {image_log}")
+
+
 def run(machine):
     ios = BUILD / "tools/go-ios"
     if not ios.is_file():
@@ -91,6 +121,8 @@ def run(machine):
             time.sleep(1)
         else:
             raise SystemExit(f"Device tunnel unavailable. See {tunnel_log.name}")
+
+        ensure_xctest_service(ios, options, result)
 
         with (result / "runner.log").open("w") as runner_log:
             completed = subprocess.run(

@@ -19,4 +19,11 @@ Simple Reader 是面向 iOS/iPadOS 17+ 的 EPUB/PDF 阅读器，界面使用 Swi
 
 - `swift test` 运行 `Tests/Logic` 中的宿主端逻辑测试；其覆盖范围受 `Package.swift` 的源文件列表限制。
 - `Tests/Integration` 包含导入、下载、翻页和阅读位置的 iOS 测试。按项目约定使用 vphone 调试；`python3 Scripts/test_vphone.py [机器名]` 构建并在 vphone 上运行 XCTest，默认机器名为 `iphone-16`。脚本使用 `xcodebuild` 构建测试包，并可能安装 go-ios。
+- 如果 XCTest 所需的 `testmanagerd` 服务缺失，测试脚本会尝试挂载开发者磁盘映像，再确认服务可用。挂载失败时查看该次运行目录中的 `image.log`。
 - `Scripts/build_unsigned_ipa.sh` 生成未签名 IPA；它调用 `xcodebuild` 归档。`Docs/` 中的架构调研是历史分析，具体实现以当前代码为准。
+
+## vphone 启动故障
+
+1. Codex 沙箱无法访问 Launchpad 控制套接字时，以 `require_escalated` 重跑 `vphone-launchpad-cli status` 和启动命令。
+2. 如果 `vphone-launchpad-cli vm log <机器名>` 显示 `AMFI blocked vphone-vm`，用 `vphone-launchpad-cli vm list` 确认该机器的 `bundle` 版本，再以沙箱外权限运行 `vphone-launchpad-cli bundle verify <版本>`。Launchpad 会通过宿主 helper 重新校验该版本，并在需要时按签名授权 `vphone-vm`。
+3. 重新运行 `vphone-launchpad-cli vm start <机器名> --headless --wait`。看到 `vphoned answered` 后再跑 XCTest。如果仍报 AMFI 拦截，把启动日志交给宿主机所有者处理。
