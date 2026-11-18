@@ -1,7 +1,6 @@
-import Observation
 import SwiftUI
 
-private enum OPDSRoute: Hashable {
+enum OPDSRoute: Hashable {
     case catalog(serverID: UUID, url: URL)
     case entry(EntrySelection)
 
@@ -118,126 +117,6 @@ struct ServerEditor: View {
     }
 }
 
-@Observable @MainActor final class CatalogModel {
-    private(set) var catalog: OPDSCatalog?
-    private(set) var loading = false
-    var error: String?
-    var query = ""
-    let server: OPDSServer
-    private let initialURL: URL
-    private let client: OPDSClient
-    private let accounts: AccountSettings
-    private var searchLink: OPDSLink?
-    @ObservationIgnored private var visited: Set<URL> = []
-    init(server: OPDSServer, url: URL, client: OPDSClient, accounts: AccountSettings) {
-        self.server = server; initialURL = url; self.client = client; self.accounts = accounts
-    }
-    func credentials() throws -> ServerCredentials { try accounts.credentials(for: server) }
-    var canSearch: Bool { searchLink != nil }
-    func load(url: URL? = nil, append: Bool = false) async {
-        guard !loading else { return }; loading = true; defer { loading = false }
-        do {
-            let target = url ?? initialURL
-            if append && visited.contains(target) { throw AppFailure("The server returned a repeated pagination link.") }
-            var loaded = try await client.load(target, credentials: credentials())
-            if append, let previous = catalog {
-                let ids = Set(previous.entries.map(\.id)); loaded.entries = previous.entries + loaded.entries.filter { !ids.contains($0.id) }
-                loaded.title = previous.title
-            } else { visited.removeAll(); searchLink = loaded.search ?? searchLink }
-            visited.insert(target); catalog = loaded
-        } catch { self.error = error.localizedDescription }
-    }
-    func search() async {
-        guard let link = searchLink else { return }
-        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { await load(); return }
-        do { let url = try await client.searchURL(link: link, query: query, credentials: credentials()); await load(url: url) }
-        catch { self.error = error.localizedDescription }
-    }
-}
-struct CatalogView: View {
-    private let server: OPDSServer
-    private let url: URL
-    private let environment: AppEnvironment
-    @State private var model: CatalogModel?
-
-    init(server: OPDSServer, url: URL, environment: AppEnvironment) {
-        self.server = server
-        self.url = url
-        self.environment = environment
-    }
-
-    var body: some View {
-        ZStack {
-            if let model {
-                catalogContent(model)
-            } else {
-                ProgressView("Loading…")
-            }
-        }
-        .navigationTitle(model?.catalog?.title ?? server.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { DownloadsToolbarButton(manager: environment.downloads, environment: environment, alwaysVisible: true) } }
-        .task {
-            // Create the model when this destination appears, once per page identity.
-            if model == nil {
-                model = CatalogModel(server: server, url: url, client: environment.opds, accounts: environment.accounts)
-            }
-            if let model, model.catalog == nil { await model.load() }
-        }
-    }
-
-    private func catalogContent(_ catalogModel: CatalogModel) -> some View {
-        @Bindable var model = catalogModel
-        return VStack(spacing: 0) {
-            if model.canSearch {
-                HStack {
-                    TextField("Search library", text: $model.query)
-                        .submitLabel(.search)
-                        .onSubmit { Task { await model.search() } }
-                    Button("Search") { Task { await model.search() } }
-                        .disabled(model.loading)
-                }
-                .padding()
-                .background(Color(uiColor: .secondarySystemBackground))
-            }
-            List {
-                ForEach(model.catalog?.entries ?? []) { entry in
-                    let route: OPDSRoute = if let navigation = entry.navigation, entry.downloads.isEmpty {
-                        .catalog(serverID: model.server.id, url: navigation.url)
-                    } else {
-                        .entry(.init(server: model.server, entry: entry))
-                    }
-                    NavigationLink(value: route) {
-                        CatalogRow(entry: entry, model: model, http: environment.http)
-                    }
-                }
-                if let next = model.catalog?.next { Button("Load Next Page") { Task { await model.load(url: next, append: true) } }.disabled(model.loading) }
-                if model.loading { ProgressView("Loading…") }
-                if !model.loading && model.catalog?.entries.isEmpty == true { Text("This catalog has no books").foregroundColor(.secondary) }
-                if model.catalog == nil && !model.loading { Button("Reload") { Task { await model.load() } } }
-            }
-        }
-        .errorAlert($model.error)
-    }
-}
-private struct CatalogRow: View {
-    let entry: OPDSEntry
-    let model: CatalogModel
-    let http: HTTPClient
-    @State private var cover: UIImage?
-    var body: some View {
-        HStack(spacing: 14) {
-            if entry.cover != nil {
-                Group { if let cover = cover { Image(uiImage: cover).resizable().scaledToFit() } else { Image(systemName: "book.closed").foregroundColor(.secondary) } }.frame(width: 40, height: 56)
-            }
-            VStack(alignment: .leading, spacing: 5) { Text(entry.title); if !entry.author.isEmpty { Text(entry.author).font(.caption).foregroundColor(.secondary) } }
-        }.padding(.vertical, 4)
-        .task(id: entry.cover) {
-            guard let url = entry.cover else { return }
-            do { let (data, _) = try await http.data(http.request(url, credentials: model.credentials())); cover = UIImage(data: data) } catch { /* Optional artwork must not block browsing. */ }
-        }
-    }
-}
 struct EntryView: View {
     let entry: OPDSEntry
     let server: OPDSServer

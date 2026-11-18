@@ -14,7 +14,8 @@ let package = Package(
             exclude: ["App", "Views", "Reader", "Resources", "Services/BookImportService.swift",
                       "Services/DownloadManager.swift", "Services/ReadiumService.swift"],
             sources: ["Models", "Persistence", "Services/BookHashing.swift", "Services/HTTPClient.swift",
-                      "Services/KOReaderSyncClient.swift", "Services/OPDSClient.swift", "Services/EPUBSpine.swift"]
+                      "Services/KOReaderSyncClient.swift", "Services/OPDSClient.swift", "Services/OPDSCatalogSession.swift",
+                      "Services/EPUBSpine.swift"]
         ),
         .testTarget(name: "SimpleReaderTests", dependencies: ["SimpleReader"], path: "Tests/Logic")
     ]

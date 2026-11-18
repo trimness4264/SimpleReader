@@ -1,3 +1,5 @@
+import Observation
+import os
 import XCTest
 @testable import SimpleReader
 
@@ -103,5 +105,203 @@ final class OPDSCatalogTests: XCTestCase {
         XCTAssertEqual(components.path, "/search")
         XCTAssertEqual(components.queryItems, [URLQueryItem(name: "q", value: "中文 & a+b/#?"), URLQueryItem(name: "page", value: "1")])
         XCTAssertNil(components.fragment)
+    }
+
+    @available(macOS 14, *)
+    @MainActor func testLatestSearchWinsWhileOpenSearchTemplateIsLoading() async throws {
+        let discovering = expectation(description: "First OpenSearch request started")
+        let hasRequestedDescription = OSAllocatedUnfairLock(initialState: false)
+        let releaseDescription = DispatchSemaphore(value: 0)
+        let (http, origin) = HTTPStub.client(for: self) { request in
+            switch request.url?.path {
+            case "/":
+                return (200, """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <title>Library</title><link rel="next" href="/next"/>
+                  <link rel="search" type="application/opensearchdescription+xml" href="/search.xml"/>
+                </feed>
+                """)
+            case "/search.xml":
+                let isFirst = hasRequestedDescription.withLock { requested in
+                    let isFirst = !requested
+                    requested = true
+                    return isFirst
+                }
+                if isFirst {
+                    discovering.fulfill()
+                    guard releaseDescription.wait(timeout: .now() + 5) == .success else {
+                        throw URLError(.timedOut)
+                    }
+                    return (503, "")
+                }
+                return (200, """
+                <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+                  <Url type="application/atom+xml" template="/search?q={searchTerms}"/>
+                </OpenSearchDescription>
+                """)
+            case "/search":
+                XCTAssertEqual(request.url?.query, "q=latest")
+                return (200, """
+                <feed xmlns="http://www.w3.org/2005/Atom"><title>Latest results</title></feed>
+                """)
+            default:
+                XCTFail("Unexpected catalog request: \(request)")
+                throw URLError(.unsupportedURL)
+            }
+        }
+        let session = try catalogSession(http: http, url: origin.appendingPathComponent("/"))
+        session.resume()
+        await waitForLoad(session)
+
+        session.search("first")
+        await fulfillment(of: [discovering], timeout: 5)
+        XCTAssertTrue(session.isLoading)
+        session.loadNextPage()
+        session.search("latest")
+        releaseDescription.signal()
+        await waitForLoad(session)
+
+        XCTAssertEqual(session.catalog?.title, "Latest results")
+        XCTAssertTrue(session.canSearch)
+        XCTAssertNil(session.error)
+    }
+
+    @available(macOS 14, *)
+    @MainActor func testPaginationKeepsCatalogTitleAndResetsVisitedPagesAfterSearch() async throws {
+        let firstPageStarted = expectation(description: "First pagination request started")
+        let releasePage = DispatchSemaphore(value: 0)
+        let pageRequests = OSAllocatedUnfairLock(initialState: 0)
+        let (http, origin) = HTTPStub.client(for: self) { request in
+            switch request.url?.path {
+            case "/":
+                return (200, """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <title>Library</title><link rel="next" href="/next"/>
+                  <link rel="search" type="application/atom+xml" href="/search?q={searchTerms}"/>
+                  <entry><id>one</id><title>First book</title></entry>
+                </feed>
+                """)
+            case "/next":
+                let requestNumber = pageRequests.withLock { count in
+                    count += 1
+                    return count
+                }
+                if requestNumber == 1 {
+                    firstPageStarted.fulfill()
+                    guard releasePage.wait(timeout: .now() + 5) == .success else {
+                        throw URLError(.timedOut)
+                    }
+                }
+                return (200, """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <title>Page two</title><link rel="next" href="/next"/>
+                  <entry><id>one</id><title>First book</title></entry>
+                  <entry><id>two</id><title>Second book</title></entry>
+                </feed>
+                """)
+            case "/search":
+                return (200, """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <title>Search results</title><link rel="next" href="/next"/>
+                  <entry><id>one</id><title>First book</title></entry>
+                </feed>
+                """)
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+        let session = try catalogSession(http: http, url: origin.appendingPathComponent("/"))
+        session.resume()
+        await waitForLoad(session)
+
+        session.loadNextPage()
+        await fulfillment(of: [firstPageStarted], timeout: 5)
+        session.loadNextPage()
+        releasePage.signal()
+        await waitForLoad(session)
+        XCTAssertEqual(session.catalog?.title, "Library")
+        XCTAssertEqual(session.catalog?.entries.map(\.id), ["one", "two"])
+        XCTAssertEqual(pageRequests.withLock { $0 }, 1)
+
+        session.loadNextPage()
+        XCTAssertNotNil(session.error)
+        XCTAssertFalse(session.isLoading)
+
+        session.search("book")
+        await waitForLoad(session)
+        XCTAssertEqual(session.catalog?.entries.map(\.id), ["one"])
+        session.loadNextPage()
+        await waitForLoad(session)
+        XCTAssertEqual(session.catalog?.title, "Search results")
+        XCTAssertEqual(session.catalog?.entries.map(\.id), ["one", "two"])
+        XCTAssertNil(session.error)
+    }
+
+    @available(macOS 14, *)
+    @MainActor func testReturningToCatalogResumesInterruptedSearch() async throws {
+        let searchStarted = expectation(description: "Search request started")
+        let releaseSearch = DispatchSemaphore(value: 0)
+        let searchRequests = OSAllocatedUnfairLock(initialState: 0)
+        let (http, origin) = HTTPStub.client(for: self) { request in
+            switch request.url?.path {
+            case "/":
+                return (200, """
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <title>Library</title>
+                  <link rel="search" type="application/atom+xml" href="/search?q={searchTerms}"/>
+                </feed>
+                """)
+            case "/search":
+                XCTAssertEqual(request.url?.query, "q=book")
+                let requestNumber = searchRequests.withLock { count in
+                    count += 1
+                    return count
+                }
+                if requestNumber == 1 {
+                    searchStarted.fulfill()
+                    guard releaseSearch.wait(timeout: .now() + 5) == .success else {
+                        throw URLError(.timedOut)
+                    }
+                    return (503, "")
+                }
+                return (200, """
+                <feed xmlns="http://www.w3.org/2005/Atom"><title>Search results</title></feed>
+                """)
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+        let session = try catalogSession(http: http, url: origin.appendingPathComponent("/"))
+        session.resume()
+        await waitForLoad(session)
+
+        session.search("book")
+        await fulfillment(of: [searchStarted], timeout: 5)
+        session.pause()
+        XCTAssertFalse(session.isLoading)
+        XCTAssertEqual(session.catalog?.title, "Library")
+        releaseSearch.signal()
+
+        session.resume()
+        await waitForLoad(session)
+        XCTAssertEqual(session.catalog?.title, "Search results")
+        XCTAssertEqual(searchRequests.withLock { $0 }, 2)
+        XCTAssertNil(session.error)
+    }
+
+    @available(macOS 14, *)
+    @MainActor private func catalogSession(http: HTTPClient, url: URL) throws -> OPDSCatalogSession {
+        let server = OPDSServer(id: UUID(), name: "Library", url: url, username: "")
+        let credentials = CredentialStorage(read: { _ in nil }, write: { _, _ in })
+        let accounts = AccountSettings(store: try library(), http: http, credentialStorage: credentials)
+        return OPDSCatalogSession(server: server, url: url, client: OPDSClient(http: http), accounts: accounts)
+    }
+
+    @available(macOS 14, *)
+    @MainActor private func waitForLoad(_ session: OPDSCatalogSession) async {
+        guard session.isLoading else { return }
+        let finished = expectation(description: "Catalog request finished")
+        withObservationTracking({ _ = session.isLoading }, onChange: { finished.fulfill() })
+        await fulfillment(of: [finished], timeout: 5)
     }
 }

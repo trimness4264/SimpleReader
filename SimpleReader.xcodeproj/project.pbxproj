@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		A7C180000000000000000017 /* SimpleReader/Views/ReaderControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000018 /* SimpleReader/Views/ReaderControls.swift */; };
 		A7C180000000000000000019 /* SimpleReader/Views/ReaderPreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000001A /* SimpleReader/Views/ReaderPreferencesView.swift */; };
+		A7C18000000000000000001B /* SimpleReader/Services/OPDSCatalogSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000001C /* SimpleReader/Services/OPDSCatalogSession.swift */; };
+		A7C18000000000000000001D /* SimpleReader/Views/OPDSCatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000001E /* SimpleReader/Views/OPDSCatalogView.swift */; };
 		A7C180000000000000000015 /* SimpleReader/Reader/EPUBReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000016 /* SimpleReader/Reader/EPUBReader.swift */; };
 		A7C180000000000000000013 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000014 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift */; };
 		A7C18000000000000000000D /* SimpleReader/Reader/ContinuousChapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */; };
@@ -82,6 +84,8 @@
 /* Begin PBXFileReference section */
 		A7C180000000000000000018 /* SimpleReader/Views/ReaderControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/ReaderControls.swift; sourceTree = "<group>"; };
 		A7C18000000000000000001A /* SimpleReader/Views/ReaderPreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/ReaderPreferencesView.swift; sourceTree = "<group>"; };
+		A7C18000000000000000001C /* SimpleReader/Services/OPDSCatalogSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/OPDSCatalogSession.swift; sourceTree = "<group>"; };
+		A7C18000000000000000001E /* SimpleReader/Views/OPDSCatalogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/OPDSCatalogView.swift; sourceTree = "<group>"; };
 		A7C180000000000000000016 /* SimpleReader/Reader/EPUBReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/EPUBReader.swift; sourceTree = "<group>"; };
 		A7C180000000000000000014 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReadiumPageTurnSurface.swift; sourceTree = "<group>"; };
 		A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousChapter.swift; sourceTree = "<group>"; };
@@ -203,10 +207,12 @@
 				00000000000000000000000B /* SimpleReader/Services/HTTPClient.swift */,
 				00000000000000000000000C /* SimpleReader/Services/KOReaderSyncClient.swift */,
 				00000000000000000000000D /* SimpleReader/Services/OPDSClient.swift */,
+				A7C18000000000000000001C /* SimpleReader/Services/OPDSCatalogSession.swift */,
 				00000000000000000000000E /* SimpleReader/Services/ReadiumService.swift */,
 				00000000000000000000000F /* SimpleReader/Views/DownloadsView.swift */,
 				000000000000000000000010 /* SimpleReader/Views/LibraryView.swift */,
 				000000000000000000000011 /* SimpleReader/Views/OPDSViews.swift */,
+				A7C18000000000000000001E /* SimpleReader/Views/OPDSCatalogView.swift */,
 				000000000000000000000012 /* SimpleReader/Views/ReaderView.swift */,
 				A7C180000000000000000018 /* SimpleReader/Views/ReaderControls.swift */,
 				A7C18000000000000000001A /* SimpleReader/Views/ReaderPreferencesView.swift */,
@@ -404,10 +410,12 @@
 				000000000000000000000033 /* SimpleReader/Services/HTTPClient.swift in Sources */,
 				000000000000000000000034 /* SimpleReader/Services/KOReaderSyncClient.swift in Sources */,
 				000000000000000000000035 /* SimpleReader/Services/OPDSClient.swift in Sources */,
+				A7C18000000000000000001B /* SimpleReader/Services/OPDSCatalogSession.swift in Sources */,
 				000000000000000000000036 /* SimpleReader/Services/ReadiumService.swift in Sources */,
 				000000000000000000000037 /* SimpleReader/Views/DownloadsView.swift in Sources */,
 				000000000000000000000038 /* SimpleReader/Views/LibraryView.swift in Sources */,
 				000000000000000000000039 /* SimpleReader/Views/OPDSViews.swift in Sources */,
+				A7C18000000000000000001D /* SimpleReader/Views/OPDSCatalogView.swift in Sources */,
 				00000000000000000000003A /* SimpleReader/Views/ReaderView.swift in Sources */,
 				A7C180000000000000000017 /* SimpleReader/Views/ReaderControls.swift in Sources */,
 				A7C180000000000000000019 /* SimpleReader/Views/ReaderPreferencesView.swift in Sources */,
