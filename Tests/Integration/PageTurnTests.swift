@@ -46,6 +46,66 @@ import PDFKit
         XCTAssertEqual(store.book(book.id)?.pendingSync, false)
         XCTAssertFalse(session.container.isTurningPage)
         XCTAssertTrue(session.container.view.isUserInteractionEnabled)
+        XCTAssertTrue(session.canBeginPageTurn(isGesture: true))
+        await session.close()
+    }
+
+    func testBackgroundBeforePDFTurnCommitsRestoresOrigin() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
+        let server = ProgressServer()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+        let window = present(session.container)
+        window.windowScene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        window.makeKeyAndVisible()
+        session.container.view.layoutIfNeeded()
+        defer { window.isHidden = true }
+        await session.load()
+        let origin = try XCTUnwrap(store.book(book.id)?.position)
+
+        // Interrupt after the renderer moves and before the container confirms completion.
+        let turn = Task { await session.turn(forward: true) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while session.currentPDFPage != 2 && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(session.currentPDFPage, 2)
+        XCTAssertTrue(session.container.isTurningPage)
+        XCTAssertEqual(store.book(book.id)?.position, origin)
+        await session.background()
+        await turn.value
+        XCTAssertFalse(session.container.isTurningPage)
+        XCTAssertTrue(session.isRestoring)
+        XCTAssertFalse(session.container.view.isUserInteractionEnabled)
+        XCTAssertEqual(store.book(book.id)?.position, origin)
+
+        session.container.beginAppearanceTransition(false, animated: false)
+        session.container.endAppearanceTransition()
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+        let synchronized = expectation(description: "Foreground sync ran after position recovery")
+        server.onRead = {
+            XCTAssertFalse(session.isRestoring)
+            XCTAssertEqual(session.currentPDFPage, 1)
+            synchronized.fulfill()
+        }
+        await session.foreground()
+        XCTAssertTrue(session.isRestoring)
+        XCTAssertFalse(session.container.view.isUserInteractionEnabled)
+
+        session.container.beginAppearanceTransition(true, animated: false)
+        session.container.endAppearanceTransition()
+        await fulfillment(of: [synchronized], timeout: 10)
+        server.onRead = nil
+
+        XCTAssertEqual(session.currentPDFPage, 1)
+        XCTAssertEqual(store.book(book.id)?.position, origin)
+        XCTAssertFalse(session.isRestoring)
+        XCTAssertTrue(session.container.view.isUserInteractionEnabled)
+        XCTAssertTrue(session.canBeginPageTurn(isGesture: false))
         await session.close()
     }
 

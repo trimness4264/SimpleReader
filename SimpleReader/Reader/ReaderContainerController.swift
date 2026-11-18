@@ -1,11 +1,18 @@
 import UIKit
 import PDFKit
 
+enum PageTurnOutcome {
+    case settled
+    case unchanged
+    case restoreOrigin(Error?)
+}
+
 @MainActor protocol ReaderPageTurnDelegate: AnyObject {
     func canBeginPageTurn(isGesture: Bool) -> Bool
     func pageTurnWillBegin()
     func movePage(towardLeft: Bool) async throws -> Bool
-    func pageTurnDidFinish(committed: Bool, error: Error?) async
+    func pageTurnDidFinish(_ outcome: PageTurnOutcome) async
+    func pageTurnWasCancelled(needsRestoration: Bool)
 }
 
 private final class ReaderContainerView: UIView {
@@ -39,8 +46,16 @@ private final class ReaderContainerView: UIView {
     var onLayoutWillChange: (() -> Void)?
     var onLayoutDidChange: (() -> Void)?
     var onAppearanceChange: (() -> Void)?
+    var onVisibilityChanged: ((Bool) -> Void)?
     weak var pageTurnDelegate: ReaderPageTurnDelegate?
     private(set) var isTurningPage = false
+    var allowsContentInteraction = true {
+        didSet { updateContentInteraction() }
+    }
+    private var finishingPageTurn = false {
+        didSet { updateContentInteraction() }
+    }
+    private var pageNavigationStarted = false
     private lazy var pageTurnPan = UIPanGestureRecognizer(target: self, action: #selector(handlePageTurn(_:)))
 
     override func loadView() {
@@ -50,6 +65,11 @@ private final class ReaderContainerView: UIView {
             self?.onLayoutWillChange?()
         }
         view = surface
+        updateContentInteraction()
+    }
+
+    private func updateContentInteraction() {
+        if isViewLoaded { view.isUserInteractionEnabled = allowsContentInteraction && !finishingPageTurn }
     }
 
     override func viewDidLoad() {
@@ -90,7 +110,7 @@ private final class ReaderContainerView: UIView {
         case .ended:
             finishPageTurn(translation: gesture.translation(in: view), velocity: gesture.velocity(in: view))
         case .cancelled, .failed:
-            finishPageTurn(translation: .zero)
+            if isTurningPage && !finishingPageTurn { cancelPageTransition() }
         default:
             break
         }
@@ -103,7 +123,7 @@ private final class ReaderContainerView: UIView {
         let quickSwipe = abs(translation.x) >= 8 && abs(velocity.x) >= 450
         let commit = translation.x * projected > 0 && (crossedThreshold || quickSwipe)
         updatePageTurn(translation: translation)
-        view.isUserInteractionEnabled = false
+        finishingPageTurn = true
         let revision = pageTransitionRevision
         let surface = pageTurnSurface
         Task { [weak self] in
@@ -123,7 +143,7 @@ private final class ReaderContainerView: UIView {
             case .navigate:
                 await self.performPageTurn(towardLeft: projected < 0, revision: revision)
             case .complete(let committed):
-                await self.completePageTurn(committed: committed, revision: revision)
+                await self.completePageTurn(committed ? .settled : .unchanged, revision: revision)
             }
         }
     }
@@ -156,13 +176,18 @@ private final class ReaderContainerView: UIView {
 
     private func performPageTurn(towardLeft: Bool, revision: Int) async {
         guard revision == pageTransitionRevision else { return }
-        view.isUserInteractionEnabled = false
+        finishingPageTurn = true
         var failure: Error?
         let moved = await animatePageTurn(direction: towardLeft ? 1 : -1) {
             do {
-                guard revision == self.pageTransitionRevision,
-                      try await self.pageTurnDelegate?.movePage(towardLeft: towardLeft) == true,
-                      revision == self.pageTransitionRevision else { return false }
+                guard revision == self.pageTransitionRevision else { return false }
+                self.pageNavigationStarted = true
+                let moved = try await self.pageTurnDelegate?.movePage(towardLeft: towardLeft) == true
+                guard revision == self.pageTransitionRevision else { return false }
+                if !moved {
+                    self.pageNavigationStarted = false
+                    return false
+                }
                 if let surface = self.pageTurnSurface {
                     try await surface.waitForContent {
                         revision == self.pageTransitionRevision && self.pageTurnSurface === surface
@@ -176,18 +201,27 @@ private final class ReaderContainerView: UIView {
                 return false
             }
         }
-        await completePageTurn(committed: moved, error: failure, revision: revision)
+        let outcome: PageTurnOutcome
+        if moved {
+            outcome = .settled
+        } else if pageNavigationStarted {
+            outcome = .restoreOrigin(failure)
+        } else {
+            outcome = .unchanged
+        }
+        await completePageTurn(outcome, revision: revision)
     }
 
-    private func completePageTurn(committed: Bool, error: Error? = nil, revision: Int) async {
+    private func completePageTurn(_ outcome: PageTurnOutcome, revision: Int) async {
         guard revision == pageTransitionRevision else { return }
         // Do not unlock native pans until the settled position has been captured.
-        await pageTurnDelegate?.pageTurnDidFinish(committed: committed, error: error)
+        await pageTurnDelegate?.pageTurnDidFinish(outcome)
         guard revision == pageTransitionRevision else { return }
         pageTurnSurface?.endDrag()
         clearPageAnimation()
-        view.isUserInteractionEnabled = true
+        pageNavigationStarted = false
         isTurningPage = false
+        finishingPageTurn = false
     }
 
     func updatePageTurn(translation: CGPoint) {
@@ -195,11 +229,15 @@ private final class ReaderContainerView: UIView {
     }
 
     func cancelPageTransition() {
+        let wasTurning = isTurningPage
+        let needsRestoration = pageNavigationStarted
         pageTransitionRevision += 1
         clearPageAnimation()
         pageTurnSurface?.cancelDrag()
-        if isTurningPage { view.isUserInteractionEnabled = true }
+        pageNavigationStarted = false
         isTurningPage = false
+        if wasTurning { pageTurnDelegate?.pageTurnWasCancelled(needsRestoration: needsRestoration) }
+        finishingPageTurn = false
     }
 
     private func clearPageAnimation() {
@@ -292,10 +330,12 @@ private final class ReaderContainerView: UIView {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         appeared = true
+        onVisibilityChanged?(true)
     }
     override func viewWillDisappear(_ animated: Bool) {
-        cancelPageTransition()
         appeared = false
+        onVisibilityChanged?(false)
+        cancelPageTransition()
         super.viewWillDisappear(animated)
     }
     func replaceChild(with child: UIViewController, pageTurnSurface: ReadiumPageTurnSurface? = nil) {

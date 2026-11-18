@@ -13,7 +13,29 @@ import ReadiumShared
         case checkpoint, movement, remote(RemoteProgress)
     }
 
-    enum Activity { case idle, navigating, restoring }
+    enum Activity { case idle, navigating, turningPage, restoring }
+
+    struct Navigation: Equatable {
+        enum Kind { case jump, pageTurn }
+        let kind: Kind
+        fileprivate let revision: Int
+    }
+
+    enum History { case unchanged, rememberOrigin, returning }
+
+    private enum State {
+        case idle
+        case navigating(Navigation, origin: Checkpoint)
+        case restoring(Checkpoint)
+
+        var activity: Activity {
+            switch self {
+            case .idle: return .idle
+            case .navigating(let navigation, _): return navigation.kind == .pageTurn ? .turningPage : .navigating
+            case .restoring: return .restoring
+            }
+        }
+    }
 
     private let bookID: UUID
     private let store: LibraryStore
@@ -23,11 +45,18 @@ import ReadiumShared
     private var pendingLocator: Locator?
     private var capture: Task<Void, Never>?
     private var restoration: Task<Void, Never>?
-    private var origin: Checkpoint?
-    private(set) var checkpoint: Checkpoint?
     private(set) var previous: Checkpoint?
-    private(set) var activity: Activity = .idle {
-        didSet { if activity != oldValue { onActivityChanged?(activity) } }
+    private var state = State.idle {
+        didSet { if activity != oldValue.activity { onActivityChanged?(activity) } }
+    }
+    var activity: Activity { state.activity }
+    var checkpoint: Checkpoint? {
+        if case .restoring(let checkpoint) = state { return checkpoint }
+        return nil
+    }
+    var pageTurn: Navigation? {
+        guard case .navigating(let navigation, _) = state, navigation.kind == .pageTurn else { return nil }
+        return navigation
     }
     var onActivityChanged: ((Activity) -> Void)?
     private(set) var revision = 0
@@ -57,31 +86,53 @@ import ReadiumShared
 
     func movementBegan() { movementRevision += 1 }
 
-    func beginNavigation(from checkpoint: Checkpoint) -> Int {
+    func beginNavigation(_ kind: Navigation.Kind, from checkpoint: Checkpoint) -> Navigation {
         invalidate()
-        origin = checkpoint
-        activity = .navigating
-        return revision
+        let navigation = Navigation(kind: kind, revision: revision)
+        state = .navigating(navigation, origin: checkpoint)
+        return navigation
     }
 
-    func refineOrigin(_ checkpoint: Checkpoint) { origin = checkpoint }
-
-    func finishNavigation(_ revision: Int) {
-        // A cancelled task still owns its lock until another operation takes over.
-        guard self.revision == revision, activity == .navigating else { return }
-        origin = nil
-        activity = .idle
+    func origin(of navigation: Navigation) -> Checkpoint? {
+        guard case .navigating(let current, let origin) = state,
+              current == navigation, navigation.revision == revision else { return nil }
+        return origin
     }
 
-    func rememberOrigin(returning: Bool) {
-        previous = returning ? nil : origin
+    func refineOrigin(_ checkpoint: Checkpoint, for navigation: Navigation) {
+        guard origin(of: navigation) != nil else { return }
+        state = .navigating(navigation, origin: checkpoint)
+    }
+
+    func finishNavigation(_ navigation: Navigation) {
+        guard origin(of: navigation) != nil else { return }
+        state = .idle
+    }
+
+    func commitNavigation(_ navigation: Navigation, position: ReadingPosition, from source: Source,
+                          locator: Locator? = nil, history: History = .unchanged) throws {
+        guard !Task.isCancelled, let origin = origin(of: navigation) else { throw CancellationError() }
+        let changed = try commit(position, from: source, locator: locator)
+        switch history {
+        case .rememberOrigin where changed: previous = origin
+        case .returning: previous = nil
+        default: break
+        }
     }
 
     func protect(_ fallback: @autoclosure () -> Checkpoint) {
+        let saved: Checkpoint
+        switch state {
+        case .idle: saved = fallback()
+        case .navigating(_, let origin), .restoring(let origin): saved = origin
+        }
         invalidate()
-        checkpoint = checkpoint ?? origin ?? fallback()
-        origin = nil
-        activity = .restoring
+        state = .restoring(saved)
+    }
+
+    func recover(_ navigation: Navigation) {
+        guard let origin = origin(of: navigation) else { return }
+        protect(origin)
     }
 
     @discardableResult
@@ -101,8 +152,7 @@ import ReadiumShared
     func finishRestoration(at locator: Locator?) {
         latestLocator = locator
         pendingLocator = nil
-        checkpoint = nil
-        activity = .idle
+        state = .idle
     }
 
     func observe(_ locator: Locator, capture: @escaping (Locator, Int) async -> Void) {

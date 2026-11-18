@@ -147,7 +147,11 @@ import UIKit
         settings.sync.enabled = true
         try store.saveSettings(settings)
         server.remote = RemoteProgress(progress: "5", percentage: 1, timestamp: 200, device_id: "other")
-        server.onRead = { session.pageTurnWillBegin() }
+        server.onRead = {
+            session.pageTurnWillBegin()
+            session.pageTurnWasCancelled(needsRestoration: false)
+            XCTAssertTrue(session.canBeginPageTurn(isGesture: false))
+        }
 
         await session.synchronize()
 

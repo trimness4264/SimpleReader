@@ -33,7 +33,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.31</string>
 	<key>CFBundleVersion</key>
-	<string>50</string>
+	<string>51</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
