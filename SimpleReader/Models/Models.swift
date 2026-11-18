@@ -73,7 +73,7 @@ enum ReaderTheme: String, Codable {
     }
 }
 
-struct ReaderSettings: Codable {
+struct ReaderSettings: Codable, Equatable {
     var fontSize: Double = 110
     var theme: ReaderTheme = .system
     var layout: ReadingLayout = .paginated

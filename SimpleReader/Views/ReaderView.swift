@@ -10,57 +10,25 @@ private struct ReaderSurface: UIViewControllerRepresentable {
     }
 }
 
-private enum ReaderBar {
-    case top, bottom, syncStatus
-}
-
-private struct ReaderBarHeights: PreferenceKey {
-    static let defaultValue: [ReaderBar: CGFloat] = [:]
-
-    static func reduce(value: inout [ReaderBar: CGFloat], nextValue: () -> [ReaderBar: CGFloat]) {
-        value.merge(nextValue(), uniquingKeysWith: max)
-    }
-}
-
 struct ReaderView: View {
-    @StateObject private var session: ReaderSession
-    @ObservedObject private var store: LibraryStore
-    @ObservedObject private var sync: SyncCoordinator
-    @Environment(\.dismiss) private var dismiss
+    @State private var session: ReaderSession
     @Environment(\.scenePhase) private var phase
     @State private var barHeights: [ReaderBar: CGFloat] = [:]
-    @State private var showRestorationProgress = false
     @State private var showContents = false
     @State private var showPreferences = false
     @State private var showProgressJump = false
-    @State private var closing = false
-    @State private var showSyncStatus = false
-    @AppStorage("reader.showPageButtons") private var showPageButtons = false
-    @AppStorage("reader.showProgress") private var showProgress = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     init(bookID: UUID, environment: AppEnvironment) {
-        self.init(session: ReaderSession(bookID: bookID, store: environment.store, readium: environment.readium, sync: environment.sync), store: environment.store, sync: environment.sync)
-    }
-    init(session: ReaderSession, store: LibraryStore, sync: SyncCoordinator) {
-        self.store = store; self.sync = sync
-        _session = StateObject(wrappedValue: session)
+        _session = State(initialValue: ReaderSession(bookID: bookID, store: environment.store,
+            readium: environment.readium, sync: environment.sync))
     }
 
     private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
-    private var isEPUB: Bool { store.book(session.bookID)?.format == .epub }
-    private var isPagedEPUB: Bool { isEPUB && !session.isScrolling }
+    private var isPagedEPUB: Bool { session.bookFormat == .epub && !session.isScrolling }
     private var readerColorScheme: ColorScheme? {
-        store.settings.reader.theme.isDark.map { $0 ? .dark : .light }
+        session.readerSettings.theme.isDark.map { $0 ? .dark : .light }
     }
-    private var controlsAnimation: Animation {
-        .easeInOut(duration: reduceMotion ? 0.15 : 0.25)
-    }
-
-    private func controlsTransition(verticalOffset: CGFloat) -> AnyTransition {
-        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: verticalOffset))
-    }
-
     var body: some View {
+        @Bindable var session = session
         GeometryReader { geometry in
             let topBar = session.controlsVisible ? barHeights[.top, default: 0] : 0
             let bottomBar = session.controlsVisible ? barHeights[.bottom, default: 0]
@@ -76,39 +44,19 @@ struct ReaderView: View {
                 .ignoresSafeArea(.container, edges: isPhone ? .vertical : [])
         }
         .ignoresSafeArea(.keyboard)
-        .overlay {
-            if let error = session.recoveryError {
-                VStack(spacing: 12) {
-                    Text(error)
-                    Button("Reload Book") { Task { await session.retryRecovery() } }
-                }.padding().background(Color(UIColor.systemBackground))
-            } else if !session.ready && session.error == nil {
-                ProgressView("Opening…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(UIColor.systemBackground))
-            } else if session.isRestoring && showRestorationProgress {
-                ProgressView("Restoring reading position…")
-                    .padding(16)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-            }
-        }
+        .overlay { ReaderOpeningOverlay(session: session) }
         .accessibilityAction(named: Text("Show or hide reading controls")) { session.toggleControls() }
-        .overlay(alignment: .top) { topOverlay }
-        .overlay(alignment: .bottom) { bottomOverlay }
+        .overlay(alignment: .top) { ReaderTopOverlay(session: session) }
+        .overlay(alignment: .bottom) {
+            ReaderBottomOverlay(session: session, openContents: { showContents = true },
+                openPreferences: { showPreferences = true }, openProgressJump: { showProgressJump = true })
+        }
         .onPreferenceChange(ReaderBarHeights.self) { heights in
             // Keep the last measurement while controls are hidden so they can reserve space immediately.
             barHeights.merge(heights) { _, height in height }
         }
         .preferredColorScheme(readerColorScheme)
         .statusBarHidden(isPhone)
-        .task(id: session.isRestoring) {
-            showRestorationProgress = false
-            guard session.isRestoring else { return }
-            // A short pagination pass should not flash a loading screen over the page.
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            guard !Task.isCancelled else { return }
-            showRestorationProgress = true
-        }
         .task { await session.load() }
         .onChange(of: phase) { _, value in
             switch value {
@@ -131,7 +79,11 @@ struct ReaderView: View {
             }
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showPreferences) { preferencesPanel }
+        .sheet(isPresented: $showPreferences) {
+            BookReaderPreferencesView(session: session)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .alert(item: $session.prompt) { prompt in
             let percentage = Int((prompt.remote.percentage ?? 0)*100)
             switch prompt.kind {
@@ -142,136 +94,18 @@ struct ReaderView: View {
             }
         }
         .errorAlert($session.error)
-        .alert("Sync Failed", isPresented: $showSyncStatus) {
-            Button("Retry") { Task { await session.synchronize(userInitiated: true) } }
-            Button("Close", role: .cancel) {}
-        } message: { Text(session.syncMessage ?? sync.status) }
     }
 
-    private var topOverlay: some View {
-        ZStack {
-            if session.controlsVisible {
-                topControls
-                    .background { barHeight(.top) }
-                    .transition(controlsTransition(verticalOffset: -8))
-            }
-        }
-        .animation(controlsAnimation, value: session.controlsVisible)
-    }
+}
 
-    private var bottomOverlay: some View {
-        VStack(spacing: 4) {
-            if session.syncError != nil {
-                Button { showSyncStatus = true } label: {
-                    Label("Sync failed. Tap for details.", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
-                        .font(.caption).padding(12).background(.regularMaterial, in: Capsule())
-                }
-            }
-            Group {
-                if session.controlsVisible {
-                    bottomControls.transition(controlsTransition(verticalOffset: 8))
-                } else if showProgress {
-                    progressJumpButton(compact: true).transition(.opacity)
-                }
-            }
-            .disabled(!session.ready || session.isNavigating || session.isRestoring)
-        }
-        .background {
-            if session.controlsVisible {
-                barHeight(.bottom)
-            } else if session.syncError != nil {
-                barHeight(.syncStatus)
-            }
-        }
-        .animation(controlsAnimation, value: session.controlsVisible)
-    }
+private struct BookReaderPreferencesView: View {
+    let session: ReaderSession
 
-    private func barHeight(_ bar: ReaderBar) -> some View {
-        GeometryReader { geometry in
-            Color.clear.preference(key: ReaderBarHeights.self, value: [bar: geometry.size.height])
-        }
-    }
-
-    private var topControls: some View {
-        HStack(spacing: 12) {
-            Button {
-                closing = true
-                Task { await session.close(); dismiss() }
-            } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }
-                .accessibilityLabel("Back to library").disabled(closing)
-            Text(session.title).font(.headline).lineLimit(1).frame(maxWidth: .infinity)
-            if session.canReturnToPreviousPosition {
-                Button { Task { await session.returnToPreviousPosition() } } label: {
-                    Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44)
-                }.accessibilityLabel("Return to previous position").disabled(session.isNavigating || session.isRestoring)
-            }
-            Menu {
-                Text(session.syncMessage ?? sync.status)
-                Button {
-                    Task { await session.synchronize(userInitiated: true) }
-                } label: { Label("Sync Reading Progress", systemImage: "arrow.triangle.2.circlepath") }
-                Toggle("Show Compact Progress Indicator", isOn: $showProgress)
-                if !session.isScrolling { Toggle("Show Page Turn Buttons", isOn: $showPageButtons) }
-                if let warning = session.bridgeWarning { Text(warning) }
-                Button("Hide Reading Controls") { session.toggleControls() }
-            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-                .accessibilityLabel("More reading options")
-        }.padding(.horizontal, 8).background(.regularMaterial)
-    }
-
-    private var bottomControls: some View {
-        HStack(spacing: 12) {
-            Button { showContents = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
-                .accessibilityLabel("Contents")
-            Spacer(minLength: 0)
-            if showPageButtons && !session.isScrolling {
-                Button { Task { await session.turn(forward: false) } } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("Previous page")
-            }
-            progressJumpButton(compact: false).layoutPriority(1)
-            if showPageButtons && !session.isScrolling {
-                Button { Task { await session.turn(forward: true) } } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }.accessibilityLabel("Next page")
-            }
-            Spacer(minLength: 0)
-            if isEPUB {
-                Button { showPreferences = true } label: { Image(systemName: "textformat.size").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Reading Settings")
-            } else {
-                Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
-            }
-        }
-        .padding(.horizontal, 16).padding(.top, 8).background(.regularMaterial)
-    }
-
-    private func progressJumpButton(compact: Bool) -> some View {
-        Button { showProgressJump = true } label: {
-            HStack(spacing: 6) {
-                Text(session.progressLabel)
-                    .font((compact ? Font.caption : .subheadline).monospacedDigit())
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                Image(systemName: "chevron.up").font(.caption2)
-                    .accessibilityHidden(true)
-            }
-            .padding(.horizontal, compact ? 12 : 0)
-            .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Rectangle())
-            .background {
-                if compact {
-                    Capsule().fill(.regularMaterial)
-                }
-            }
-        }
-        .accessibilityLabel("Reading progress")
-        .accessibilityValue(session.progressLabel)
-        .accessibilityHint("Opens the position jump panel")
-    }
-
-    private var preferencesPanel: some View {
+    var body: some View {
         NavigationStack {
-            ReaderPreferencesView(store: store, supportsScrolling: session.supportsScrolling, onChange: { session.updatePreferences() })
+            ReaderPreferencesView(settings: session.readerSettings, supportsScrolling: session.supportsScrolling,
+                update: session.saveReaderSettings)
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 }
 private struct EPUBProgressJumpView: View {
@@ -280,7 +114,7 @@ private struct EPUBProgressJumpView: View {
         case chapter(ContentsItem)
     }
 
-    @ObservedObject var session: ReaderSession
+    let session: ReaderSession
     @Environment(\.dismiss) private var dismiss
     @State private var target: Target?
 
@@ -344,7 +178,7 @@ private struct EPUBProgressJumpView: View {
 }
 
 struct PDFPageJumpView: View {
-    @ObservedObject var session: ReaderSession
+    let session: ReaderSession
     @Environment(\.dismiss) private var dismiss
     @State private var pageInput = ""
     @State private var pageInputError: String?
@@ -416,7 +250,7 @@ private struct ReaderContentsView: View {
         case chooseChapter((ContentsItem) -> Void)
     }
 
-    @ObservedObject var session: ReaderSession
+    let session: ReaderSession
     let mode: Mode
     @Environment(\.dismiss) private var dismiss
     @State private var locating = true
@@ -508,56 +342,5 @@ private struct ReaderContentsView: View {
         .id(positionID)
         .accessibilityLabel("Current position, \(session.progressLabel)")
         .accessibilityHint("Close contents and continue reading")
-    }
-}
-struct ReaderPreferencesView: View {
-    @ObservedObject var store: LibraryStore
-    var supportsScrolling = true
-    let onChange: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var error: String?
-    var body: some View {
-        Form {
-            if supportsScrolling {
-                Section(header: Text("Reading Mode")) {
-                    Picker("Reading Mode", selection: Binding(get: { store.settings.reader.layout }, set: { value in save { $0.layout = value } })) {
-                        Text("Paginated").tag(ReadingLayout.paginated)
-                        Text("Continuous Scrolling").tag(ReadingLayout.scroll)
-                    }.pickerStyle(.segmented)
-                }
-                Section(header: Text("Typography")) {
-                    Picker("Font", selection: Binding(get: { store.settings.reader.font }, set: { value in save { $0.font = value } })) {
-                        Text("Book Serif").tag(ReaderFont.serif)
-                        Text("System Sans Serif").tag(ReaderFont.system)
-                    }
-                    VStack(alignment: .leading) {
-                        Text("Font size: \(Int(store.settings.reader.fontSize))%")
-                        Slider(value: Binding(get: { store.settings.reader.fontSize }, set: { value in save { $0.fontSize = value } }), in: 80...200, step: 10)
-                            .accessibilityLabel("Font size")
-                    }
-                    VStack(alignment: .leading) {
-                        Text("Line spacing: \(store.settings.reader.lineHeight, specifier: "%.2f")×")
-                        Slider(value: Binding(get: { store.settings.reader.lineHeight }, set: { value in save { $0.lineHeight = value } }), in: 1.2...2.0, step: 0.05)
-                            .accessibilityLabel("Line spacing")
-                    }
-                    VStack(alignment: .leading) {
-                        Text("Page margins: \(store.settings.reader.pageMargins, specifier: "%.2f")×")
-                        Slider(value: Binding(get: { store.settings.reader.pageMargins }, set: { value in save { $0.pageMargins = value } }), in: 0.5...2.0, step: 0.25)
-                            .accessibilityLabel("Page margins")
-                    }
-                }
-            }
-            Picker("Theme", selection: Binding(get: { store.settings.reader.theme }, set: { value in save { $0.theme = value } })) {
-                Text("System").tag(ReaderTheme.system)
-                Text("Light").tag(ReaderTheme.light)
-                Text("Dark").tag(ReaderTheme.dark)
-            }
-        }
-        .navigationTitle("Reading Settings").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
-        .errorAlert($error)
-    }
-    private func save(_ change: (inout ReaderSettings) -> Void) {
-        do { var settings = store.settings; change(&settings.reader); try store.saveSettings(settings); onChange() } catch { self.error = error.localizedDescription }
     }
 }

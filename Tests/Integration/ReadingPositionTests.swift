@@ -119,8 +119,10 @@ import UIKit
         let initial = try XCTUnwrap(store.book(book.id)?.position)
         let target = try XCTUnwrap(session.contents.last)
 
+        let began = expectChange("Contents jump began") { _ = session.isNavigating }
         let jump = Task { await session.go(target) }
-        await waitForValue(session.$isNavigating, description: "Contents jump began") { $0 }
+        await fulfillment(of: [began], timeout: 10)
+        XCTAssertTrue(session.isNavigating)
         await session.background()
         await jump.value
         XCTAssertTrue(session.isRestoring)
@@ -189,7 +191,9 @@ import UIKit
             settings.reader.fontSize = 160
             try store.saveSettings(settings)
             session.updatePreferences()
-            await waitForValue(session.$isRestoring, description: "Reader mode restored") { !$0 }
+            let restored = expectChange("Reader mode restored") { _ = session.isRestoring }
+            await fulfillment(of: [restored], timeout: 10)
+            XCTAssertFalse(session.isRestoring)
 
             XCTAssertNil(session.recoveryError)
             XCTAssertEqual(session.canBeginPageTurn(isGesture: false), layout == .paginated)

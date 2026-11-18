@@ -1,4 +1,6 @@
 import SwiftUI
+import Combine
+import Observation
 import ReadiumShared
 
 struct ContentsItem: Identifiable {
@@ -14,28 +16,32 @@ struct SyncPrompt: Identifiable {
     let remote: RemoteProgress
     let revision: Int
 }
-@MainActor final class ReaderSession: ObservableObject, ReaderPageTurnDelegate {
+@Observable @MainActor final class ReaderSession: ReaderPageTurnDelegate {
     let bookID: UUID
     let container = ReaderContainerController()
-    @Published private(set) var ready = false
-    @Published private(set) var controlsVisible = true
-    @Published private(set) var supportsScrolling = false
-    @Published private(set) var isRestoring = false
-    @Published private(set) var isNavigating = false
-    @Published private(set) var canReturnToPreviousPosition = false
-    @Published private(set) var recoveryError: String?
-    @Published var error: String?
-    @Published var bridgeWarning: String?
-    @Published private var syncNotice: String?
-    @Published private(set) var syncError: String?
+    private(set) var ready = false
+    private(set) var controlsVisible = true
+    private(set) var supportsScrolling = false
+    private(set) var isRestoring = false
+    private(set) var isNavigating = false
+    private(set) var canReturnToPreviousPosition = false
+    private(set) var recoveryError: String?
+    var error: String?
+    var bridgeWarning: String?
+    private var syncNotice: String?
+    private(set) var syncError: String?
     var syncMessage: String? { syncError ?? syncNotice }
-    @Published var progression: Double = 0
-    @Published var contents: [ContentsItem] = []
-    @Published private(set) var currentContentsID: UUID?
-    @Published var prompt: SyncPrompt?
+    var progression: Double = 0
+    var contents: [ContentsItem] = []
+    private(set) var currentContentsID: UUID?
+    var prompt: SyncPrompt?
     private let store: LibraryStore
     private let readium: ReadiumService
     let sync: SyncCoordinator
+    @ObservationIgnored private var libraryUpdates: Set<AnyCancellable> = []
+    private(set) var title: String
+    private(set) var bookFormat: BookFormat?
+    private(set) var readerSettings: ReaderSettings
     private let positions: ReaderPositionSession
     private enum ActiveReader {
         case epub(EPUBReader), pdf(PDFReader)
@@ -64,6 +70,9 @@ struct SyncPrompt: Identifiable {
 
     init(bookID: UUID, store: LibraryStore, readium: ReadiumService, sync: SyncCoordinator) {
         self.bookID = bookID; self.store = store; self.readium = readium; self.sync = sync
+        title = store.book(bookID)?.title ?? String(localized: "Reading")
+        bookFormat = store.book(bookID)?.format
+        readerSettings = store.settings.reader
         positions = ReaderPositionSession(bookID: bookID, store: store, sync: sync)
         progression = positions.current?.progression ?? 0
         positions.onActivityChanged = { [weak self] activity in
@@ -91,6 +100,18 @@ struct SyncPrompt: Identifiable {
             self.updatePreferences()
         }
         container.pageTurnDelegate = self
+
+        // Project only the current book's metadata and reading preferences into the screen.
+        store.$books.sink { [weak self] books in
+            guard let self else { return }
+            let book = books.first { $0.id == bookID }
+            let title = book?.title ?? String(localized: "Reading")
+            if self.title != title { self.title = title }
+            if self.bookFormat != book?.format { self.bookFormat = book?.format }
+        }.store(in: &libraryUpdates)
+        store.$settings.map(\.reader).removeDuplicates().sink { [weak self] settings in
+            self?.readerSettings = settings
+        }.store(in: &libraryUpdates)
     }
     func toggleControls() {
         guard ready, !closed, positions.activity == .idle, !container.isTurningPage else { return }
@@ -101,8 +122,7 @@ struct SyncPrompt: Identifiable {
               point.x <= bounds.minX + bounds.width * 0.8 else { return }
         toggleControls()
     }
-    var title: String { store.book(bookID)?.title ?? String(localized: "Reading") }
-    var isScrolling: Bool { supportsScrolling && store.settings.reader.layout == .scroll }
+    var isScrolling: Bool { supportsScrolling && readerSettings.layout == .scroll }
     var pdfPageCount: Int? { pdf?.pageCount }
     var currentPDFPage: Int? { pdf?.page.map { $0 + 1 } }
     var progressLabel: String {
@@ -201,6 +221,11 @@ struct SyncPrompt: Identifiable {
         scrollInsets = insets
         epub?.updateScrollInsets(insets)
         pdf?.updateScrollInsets(insets)
+    }
+
+    func saveReaderSettings(_ change: (inout ReaderSettings) -> Void) throws {
+        try store.updateReaderSettings(change)
+        updatePreferences()
     }
 
     func updatePreferences() {

@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import Combine
+import Observation
 @testable import SimpleReader
 
 extension XCTestCase {
@@ -34,6 +35,12 @@ extension XCTestCase {
         let subscription = publisher.filter(predicate).prefix(1).sink { _ in reached.fulfill() }
         defer { subscription.cancel() }
         await fulfillment(of: [reached], timeout: 10)
+    }
+
+    @MainActor func expectChange(_ description: String, reading property: () -> Void) -> XCTestExpectation {
+        let changed = expectation(description: description)
+        withObservationTracking(property, onChange: { changed.fulfill() })
+        return changed
     }
 
     func epubFile() throws -> URL {

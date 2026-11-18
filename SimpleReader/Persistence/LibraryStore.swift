@@ -60,6 +60,12 @@ import CoreData
         if let index = books.firstIndex(where: { $0.id == book.id }) { books[index] = book }
         else { books.append(book) }
     }
+    func updateReaderSettings(_ change: (inout ReaderSettings) -> Void) throws {
+        var updated = settings
+        change(&updated.reader)
+        try saveSettings(updated)
+    }
+
     func saveSettings(_ settings: AppSettings, resettingSyncBaselines: Bool = false) throws {
         let updatedBooks: [Book] = resettingSyncBaselines ? books.map { book in
             var updated = book

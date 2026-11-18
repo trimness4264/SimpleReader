@@ -13,11 +13,20 @@ struct SettingsView: View {
                 Text(store.settings.sync.enabled ? "Sync is on. Opening a book checks for progress. Closing it attempts to upload." : "Sync is off").font(.caption).foregroundColor(.secondary)
                 Text(sync.status).font(.caption).foregroundColor(.secondary)
             }
-            Section(header: Text("Reading")) { NavigationLink("Default Reading Settings", destination: ReaderPreferencesView(store: store, onChange: {})) }
+            Section(header: Text("Reading")) {
+                NavigationLink("Default Reading Settings") { DefaultReaderPreferencesView(store: store) }
+            }
             Section(header: Text("About")) {
                 NavigationLink("About Simple Reader", destination: AboutView())
             }
         }.navigationTitle("Settings").sheet(isPresented: $editing) { SyncEditor(environment: environment) }
+    }
+}
+private struct DefaultReaderPreferencesView: View {
+    @ObservedObject var store: LibraryStore
+
+    var body: some View {
+        ReaderPreferencesView(settings: store.settings.reader, update: store.updateReaderSettings)
     }
 }
 private struct AboutView: View {

@@ -1,7 +1,8 @@
 import PDFKit
 import UIKit
+import Observation
 
-@MainActor final class PDFReader: NSObject {
+@Observable @MainActor final class PDFReader: NSObject {
     struct Checkpoint {
         let page: Int
         let point: CGPoint
@@ -11,7 +12,7 @@ import UIKit
     private let view: PDFView
     private let document: PDFDocument
     private var controlsTap: PDFControlsTap?
-    private var pageObserver: NSObjectProtocol?
+    @ObservationIgnored private var pageObserver: NSObjectProtocol?
     private weak var observedScrollView: UIScrollView?
     private var insets: UIEdgeInsets?
     private var twoPages: Bool
@@ -57,6 +58,7 @@ import UIKit
         return scroll.isDragging || scroll.isDecelerating
     }
     var page: Int? {
+        access(keyPath: \.page)
         // PDFKit reports the left page of a spread, or the page at the viewport's
         // midpoint. Keep an explicitly selected visible page until the viewport moves.
         if let confirmed = confirmedPage, let scroll = scrollView,
@@ -314,6 +316,8 @@ import UIKit
     }
 
     private func pageChanged() {
+        // PDFKit may change the visible page without a change to the confirmed selection.
+        withMutation(keyPath: \.page) {}
         guard isReady, !isApplyingPosition, unsettledMoves == 0, let position = position() else { return }
         onPageChanged?(position)
     }
