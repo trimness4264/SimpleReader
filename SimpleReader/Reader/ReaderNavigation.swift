@@ -33,16 +33,17 @@ import ReadiumShared
         case originSaveFailed(Error)
         case committed(ReadingPosition)
         case rolledBack(to: ReadingPosition?, error: Error)
-        case restorationNeeded
     }
 
     private typealias Destination = (position: ReadingPosition, locator: Locator?)
     private let renderer: ReaderRenderer
     private let positions: ReaderPositionSession
+    private let recovery: ReaderRecovery
 
-    init(renderer: ReaderRenderer, positions: ReaderPositionSession) {
+    init(renderer: ReaderRenderer, positions: ReaderPositionSession, recovery: ReaderRecovery) {
         self.renderer = renderer
         self.positions = positions
+        self.recovery = recovery
     }
 
     func beginPageTurn(onSaveFailure: (Error) -> Void) {
@@ -97,8 +98,7 @@ import ReadiumShared
                     guard ownsRenderer() else { return false }
                 }
             }
-            positions.recover(navigation)
-            onEvent(.restorationNeeded)
+            recovery.recover(navigation)
             return false
         }
     }

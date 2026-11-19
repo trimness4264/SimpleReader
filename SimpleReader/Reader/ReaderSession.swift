@@ -12,7 +12,7 @@ import ReadiumShared
     private(set) var isRestoring = false
     private(set) var isNavigating = false
     private(set) var canReturnToPreviousPosition = false
-    private(set) var recoveryError: String?
+    var recoveryError: String? { recovery.error }
     var error: String?
     var bridgeWarning: String?
     var syncError: String? { progressSync.error }
@@ -29,7 +29,17 @@ import ReadiumShared
     private(set) var bookFormat: BookFormat?
     private(set) var readerSettings: ReaderSettings
     private let positions: ReaderPositionSession
-    private let navigation: ReaderNavigation
+    @ObservationIgnored private lazy var navigation = ReaderNavigation(renderer: renderer, positions: positions, recovery: recovery)
+    @ObservationIgnored private lazy var recovery = ReaderRecovery(renderer: renderer, positions: positions,
+        canProtect: { [weak self] in
+            guard let self else { return false }
+            return self.ready && !self.closed
+        },
+        canRestore: { [weak self] in
+            guard let self else { return false }
+            return self.isActive && self.isReaderVisible && !self.closed
+        },
+        onEvent: { [weak self] in self?.recoveryDidEmit($0) })
     @ObservationIgnored private lazy var progressSync = ReaderSyncSession(
         bookID: bookID, coordinator: sync, positions: positions,
         availability: { [weak self] in self?.syncAvailability ?? .unavailable },
@@ -45,8 +55,6 @@ import ReadiumShared
     // Allow recovery during initial layout until UIKit reports a disappearance.
     private var isReaderVisible = true
     @ObservationIgnored private var visibilityRevision = 0
-    private var reloadNavigatorOnRecovery = false
-    private typealias Checkpoint = ReaderPositionSession.Checkpoint
 
     init(bookID: UUID, store: LibraryStore, readium: ReadiumService, sync: SyncCoordinator) {
         self.bookID = bookID; self.store = store; self.sync = sync
@@ -55,7 +63,6 @@ import ReadiumShared
         bookFormat = store.book(bookID)?.format
         readerSettings = store.settings.reader
         positions = ReaderPositionSession(bookID: bookID, store: store, sync: sync)
-        navigation = ReaderNavigation(renderer: renderer, positions: positions)
         progression = positions.current?.progression ?? 0
         positions.onActivityChanged = { [weak self] activity in
             guard let self = self else { return }
@@ -65,8 +72,8 @@ import ReadiumShared
             if activity == .idle { self.progressSync.scheduleAutomaticCheck() }
         }
         renderer.onEvent = { [weak self] in self?.rendererDidEmit($0) }
-        container.onLayoutWillChange = { [weak self] in self?.protectPosition() }
-        container.onLayoutDidChange = { [weak self] in self?.scheduleRestoration() }
+        container.onLayoutWillChange = { [weak self] in self?.recovery.protect() }
+        container.onLayoutDidChange = { [weak self] in self?.recovery.schedule() }
         container.onPageTurnEnded = { [weak self] in self?.progressSync.scheduleAutomaticCheck() }
         container.onVisibilityChanged = { [weak self] visible in
             guard let self else { return }
@@ -75,7 +82,7 @@ import ReadiumShared
                 Task { [weak self] in await self?.resumeWhenVisible() }
             } else {
                 self.visibilityRevision += 1
-                if self.positions.activity == .restoring { self.positions.invalidate() }
+                self.recovery.readerDidDisappear()
             }
         }
         container.onAppearanceChange = { [weak self] in
@@ -175,11 +182,7 @@ import ReadiumShared
     }
 
     func updatePreferences() {
-        protectPosition()
-        do {
-            try renderer.updatePreferences(at: positions.checkpoint?.locator ?? positions.latestLocator)
-        } catch { recoveryError = error.localizedDescription }
-        scheduleRestoration()
+        recovery.applyPreferences()
     }
 
     private func rendererDidEmit(_ event: ReaderRenderer.Event) {
@@ -218,83 +221,14 @@ import ReadiumShared
             }
         }
     }
-    private func protectPosition() {
-        guard ready, !closed else {
-            container.cancelPageTransition()
-            return
+    private func recoveryDidEmit(_ event: ReaderRecovery.Event) {
+        switch event {
+        case .checkpointSaveFailed(let error):
+            self.error = error.localizedDescription
+        case .restored(let position, let checkedPointer):
+            progression = position?.progression ?? progression
+            if checkedPointer { updateBridgeWarning() }
         }
-        savePendingLocation()
-        positions.protect(Checkpoint(position: positions.current, locator: positions.latestLocator,
-            pdf: pdf?.checkpoint(at: positions.current?.pdfPage)))
-        container.cancelPageTransition()
-        epub?.cancelNavigation()
-    }
-
-    private func recover(_ navigation: ReaderPositionSession.Navigation) {
-        positions.recover(navigation)
-        scheduleNavigationRecovery()
-    }
-
-    private func scheduleNavigationRecovery() {
-        epub?.cancelNavigation()
-        scheduleRestoration()
-    }
-    private func savePendingLocation() {
-        guard ready, positions.activity == .idle, !closed else { return }
-        do { try positions.savePendingLocation() }
-        catch { self.error = error.localizedDescription }
-    }
-    @discardableResult
-    private func scheduleRestoration() -> Task<Void, Never>? {
-        guard isActive, isReaderVisible, !closed else { return nil }
-        return positions.restore { [weak self] checkpoint, revision in
-            guard let self = self else { return }
-            do {
-                try await self.restorePosition(checkpoint, revision: revision)
-            } catch is CancellationError {
-                // Keep the checkpoint for the next foreground/layout completion.
-            } catch {
-                guard self.isCurrent(revision) else { return }
-                self.recoveryError = error.localizedDescription
-            }
-        }
-    }
-    private func isCurrent(_ revision: Int) -> Bool {
-        positions.isCurrent(revision) && isActive && !closed
-    }
-
-    private func restorePosition(_ checkpoint: Checkpoint, revision: Int) async throws {
-        guard isCurrent(revision) else { throw CancellationError() }
-        recoveryError = nil
-        if epub != nil {
-            if reloadNavigatorOnRecovery {
-                try renderer.rebuildEPUB(at: checkpoint.locator)
-            }
-            guard let epub, let location = checkpoint.locator else {
-                throw AppFailure("Couldn’t read the last reading position.")
-            }
-            try await epub.move(to: .checkpoint(location, pointer: checkpoint.position?.xpointer)) {
-                self.isCurrent(revision) && self.epub === epub
-            }
-        } else if let saved = checkpoint.pdf, let pdf = pdf {
-            _ = try await pdf.move(to: .checkpoint(saved)) {
-                self.isCurrent(revision) && self.pdf === pdf
-            }
-        }
-        guard isCurrent(revision) else { throw CancellationError() }
-        if let epub, let locator = epub.currentLocation,
-           var position = checkpoint.position, position.xpointer == nil {
-            let captured = try? await epub.capture(.movement(locator), fallbackProgression: progression)
-            position.xpointer = captured?.position.xpointer
-            guard isCurrent(revision), self.epub === epub else { throw CancellationError() }
-            if position.xpointer != nil {
-                try commit(position, from: .checkpoint)
-            }
-            updateBridgeWarning()
-        }
-        progression = checkpoint.position?.progression ?? progression
-        reloadNavigatorOnRecovery = false
-        positions.finishRestoration(at: epub?.currentLocation)
     }
     func pageTurnDidFinish(_ outcome: PageTurnOutcome) async {
         guard let navigation = positions.pageTurn, ownsNavigation(navigation) else { return }
@@ -305,7 +239,7 @@ import ReadiumShared
             return
         case .restoreOrigin(let error):
             if let error { self.error = error.localizedDescription }
-            recover(navigation)
+            recovery.recover(navigation)
             return
         case .settled:
             break
@@ -322,7 +256,7 @@ import ReadiumShared
                 position = captured.position
                 locator = captured.locator
             } else {
-                recover(navigation)
+                recovery.recover(navigation)
                 return
             }
             try positions.commitNavigation(navigation, position: position, from: .movement, locator: locator)
@@ -330,7 +264,7 @@ import ReadiumShared
         } catch {
             guard ownsNavigation(navigation) else { return }
             if error is CancellationError {
-                recover(navigation)
+                recovery.recover(navigation)
             } else if epub != nil {
                 // Keep Readium usable when the displayed position cannot be recorded.
                 positions.finishNavigation(navigation)
@@ -338,14 +272,14 @@ import ReadiumShared
                 self.error = error.localizedDescription
             } else {
                 self.error = error.localizedDescription
-                recover(navigation)
+                recovery.recover(navigation)
             }
         }
     }
 
     func pageTurnWasCancelled(needsRestoration: Bool) {
         guard let navigation = positions.pageTurn else { return }
-        if needsRestoration { recover(navigation) }
+        if needsRestoration { recovery.recover(navigation) }
         else { discardPageTurn(navigation) }
     }
 
@@ -418,14 +352,7 @@ import ReadiumShared
     func resignActive() {
         guard !closed else { return }
         isActive = false
-        if positions.activity == .navigating || positions.activity == .turningPage {
-            protectPosition()
-        } else {
-            container.cancelPageTransition()
-            // A live reader keeps its page when the app is merely interrupted.
-            positions.invalidate()
-            savePendingLocation()
-        }
+        recovery.suspend()
     }
     func background() async {
         guard !closed else { return }
@@ -440,14 +367,13 @@ import ReadiumShared
         await resumeWhenVisible()
     }
     private func resumeWhenVisible() async {
-        await scheduleRestoration()?.value
+        await recovery.schedule()?.value
         await progressSync.resumeAutomaticCheck()
     }
     func retryRecovery() async {
         guard !closed else { return }
-        protectPosition()
-        reloadNavigatorOnRecovery = true
-        await foreground()
+        recovery.prepareRetry()
+        await resumeWhenVisible()
     }
     func turn(forward: Bool) async {
         let towardLeft = epub?.towardLeft(forward: forward) ?? forward
@@ -525,8 +451,6 @@ import ReadiumShared
             case .rolledBack(let origin, let error):
                 progression = origin?.progression ?? progression
                 onFailure(error)
-            case .restorationNeeded:
-                scheduleNavigationRecovery()
             }
         }
         if !request.isRemote, !closed, positions.activity == .idle { await refreshContentsPosition() }

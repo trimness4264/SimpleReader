@@ -380,7 +380,7 @@ import UIKit
         XCTAssertEqual(taps, 2)
     }
 
-    func testEPUBModeChangesPreservePositionAndReturnHistory() async throws {
+    func testEPUBModeChangesAndRecoveryRetryPreservePositionAndReturnHistory() async throws {
         let store = try library()
         let readium = ReadiumService()
         let book = try await BookImportService(store: store, readium: readium).importBook(from: epubFile())
@@ -421,6 +421,26 @@ import UIKit
             XCTAssertEqual(session.contents.map(\.id), contentsIDs)
             XCTAssertTrue(session.canReturnToPreviousPosition)
         }
+
+        let previousNavigator = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
+        session.resignActive()
+        await session.retryRecovery()
+        XCTAssertTrue(session.isRestoring)
+        XCTAssertTrue(previousNavigator === session.container.children.first)
+        await session.foreground()
+        if session.isRestoring {
+            let restored = expectChange("Deferred EPUB retry finished") { _ = session.isRestoring }
+            await fulfillment(of: [restored], timeout: 10)
+        }
+        let replacement = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
+        let recoveredLocation = try XCTUnwrap(replacement.currentLocation)
+        let recoveredPointer = try await EPUBPositionBridge.capture(navigator: replacement, locator: recoveredLocation, spine: spine)
+        XCTAssertFalse(previousNavigator === replacement)
+        XCTAssertFalse(session.isRestoring)
+        XCTAssertNil(session.recoveryError)
+        XCTAssertEqual(recoveredPointer, saved.xpointer)
+        XCTAssertEqual(store.book(book.id)?.position, saved)
+        XCTAssertTrue(session.canReturnToPreviousPosition)
 
         await session.returnToPreviousPosition()
         XCTAssertEqual(store.book(book.id)?.position?.xpointer, initial)
