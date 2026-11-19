@@ -1,7 +1,7 @@
 import Foundation
 import ReadiumShared
 
-/// Executes confirmed jumps against the position session. Page-turn animation has its own completion path.
+/// Executes jumps and persists page turns once the container confirms their outcome.
 @MainActor final class ReaderNavigation {
     enum Target {
         case progression(Double), link(Link), page(Int), checkpoint(ReaderPositionSession.Checkpoint)
@@ -35,6 +35,13 @@ import ReadiumShared
         case rolledBack(to: ReadingPosition?, error: Error)
     }
 
+    enum PageTurnEvent {
+        case committed(ReadingPosition)
+        case failed(Error)
+        case cancelTransition(Error)
+        case discarded
+    }
+
     private typealias Destination = (position: ReadingPosition, locator: Locator?)
     private let renderer: ReaderRenderer
     private let positions: ReaderPositionSession
@@ -46,8 +53,100 @@ import ReadiumShared
         self.recovery = recovery
     }
 
+    func pageTurnDirection(forward: Bool) -> Bool {
+        renderer.epub?.towardLeft(forward: forward) ?? forward
+    }
+
+    func canBeginPageTurn(isGesture: Bool) -> Bool {
+        guard positions.activity == .idle else { return false }
+        if let epub = renderer.epub { return epub.canBeginPageTurn(isGesture: isGesture) }
+        return !isGesture && renderer.pdf != nil
+    }
+
     func beginPageTurn(onSaveFailure: (Error) -> Void) {
+        guard canBeginPageTurn(isGesture: false) else { return }
         _ = begin(.pageTurn, onSaveFailure: onSaveFailure)
+    }
+
+    func movePage(towardLeft: Bool, isActive: @MainActor () -> Bool) async throws -> Bool {
+        guard let navigation = positions.pageTurn, owns(navigation, isActive: isActive) else { return false }
+        if let epub = renderer.epub {
+            return try await epub.movePage(towardLeft: towardLeft) {
+                self.owns(navigation, isActive: isActive) && self.renderer.epub === epub
+            }
+        }
+        guard let pdf = renderer.pdf else { return false }
+        return try await pdf.turn(forward: towardLeft) {
+            self.owns(navigation, isActive: isActive) && self.renderer.pdf === pdf
+        }
+    }
+
+    func finishPageTurn(_ outcome: PageTurnOutcome, fallbackProgression: Double, isActive: @MainActor () -> Bool,
+                        onEvent: @MainActor (PageTurnEvent) -> Void) async {
+        guard let navigation = positions.pageTurn, owns(navigation, isActive: isActive) else { return }
+        defer { positions.finishNavigation(navigation) }
+        switch outcome {
+        case .unchanged:
+            positions.finishNavigation(navigation)
+            onEvent(.discarded)
+            return
+        case .restoreOrigin(let error):
+            if let error { onEvent(.failed(error)) }
+            recovery.recover(navigation)
+            return
+        case .settled:
+            break
+        }
+
+        do {
+            let destination: Destination
+            if let pdf = renderer.pdf, let position = pdf.position() {
+                destination = (position, nil)
+            } else if let epub = renderer.epub,
+                      let captured = try await epub.capture(.settledPage, fallbackProgression: fallbackProgression) {
+                guard owns(navigation, isActive: isActive), renderer.epub === epub else { return }
+                destination = (captured.position, captured.locator)
+            } else {
+                recovery.recover(navigation)
+                return
+            }
+            try positions.commitNavigation(navigation, position: destination.position, from: .movement, locator: destination.locator)
+            onEvent(.committed(destination.position))
+        } catch {
+            guard owns(navigation, isActive: isActive) else { return }
+            if error is CancellationError {
+                recovery.recover(navigation)
+            } else if renderer.epub != nil {
+                // Keep Readium usable when the displayed position cannot be recorded.
+                positions.finishNavigation(navigation)
+                onEvent(.cancelTransition(error))
+            } else {
+                onEvent(.failed(error))
+                recovery.recover(navigation)
+            }
+        }
+    }
+
+    /// Returns whether to resume pending location capture after discarding an unchanged turn.
+    func cancelPageTurn(needsRestoration: Bool) -> Bool {
+        guard let navigation = positions.pageTurn else { return false }
+        if needsRestoration {
+            recovery.recover(navigation)
+            return false
+        }
+        positions.finishNavigation(navigation)
+        return true
+    }
+
+    /// On close, the saved origin is authoritative even if the renderer has moved.
+    func abandonPageTurnForClose() -> Bool {
+        guard let navigation = positions.pageTurn else { return false }
+        positions.finishNavigation(navigation)
+        return true
+    }
+
+    private func owns(_ navigation: ReaderPositionSession.Navigation, isActive: @MainActor () -> Bool) -> Bool {
+        isActive() && positions.origin(of: navigation) != nil
     }
 
     @discardableResult
@@ -67,7 +166,7 @@ import ReadiumShared
         // Publish outcomes before unlocking the transaction and waking pending sync.
         defer { positions.finishNavigation(navigation) }
         func ownsRenderer() -> Bool {
-            isActive() && positions.origin(of: navigation) != nil && renderer.epub === epub && renderer.pdf === pdf
+            owns(navigation, isActive: isActive) && renderer.epub === epub && renderer.pdf === pdf
         }
         func isCurrent() -> Bool {
             ownsRenderer() && !Task.isCancelled && (!request.isRemote || isStillVisible())

@@ -52,6 +52,7 @@ import ReadiumShared
     private var loading = false
     private var closed = false
     private var isActive = true
+    private var isNavigationActive: Bool { isActive && !closed }
     // Allow recovery during initial layout until UIKit reports a disappearance.
     private var isReaderVisible = true
     @ObservationIgnored private var visibilityRevision = 0
@@ -231,67 +232,29 @@ import ReadiumShared
         }
     }
     func pageTurnDidFinish(_ outcome: PageTurnOutcome) async {
-        guard let navigation = positions.pageTurn, ownsNavigation(navigation) else { return }
-        defer { positions.finishNavigation(navigation) }
-        switch outcome {
-        case .unchanged:
-            discardPageTurn(navigation)
-            return
-        case .restoreOrigin(let error):
-            if let error { self.error = error.localizedDescription }
-            recovery.recover(navigation)
-            return
-        case .settled:
-            break
-        }
-
-        do {
-            let position: ReadingPosition
-            let locator: Locator?
-            if let pdf, let settledPosition = pdf.position() {
-                position = settledPosition
-                locator = nil
-            } else if let epub, let captured = try await epub.capture(.settledPage, fallbackProgression: progression) {
-                guard ownsNavigation(navigation), self.epub === epub else { return }
-                position = captured.position
-                locator = captured.locator
-            } else {
-                recovery.recover(navigation)
-                return
-            }
-            try positions.commitNavigation(navigation, position: position, from: .movement, locator: locator)
-            progression = position.progression
-        } catch {
-            guard ownsNavigation(navigation) else { return }
-            if error is CancellationError {
-                recovery.recover(navigation)
-            } else if epub != nil {
-                // Keep Readium usable when the displayed position cannot be recorded.
-                positions.finishNavigation(navigation)
+        await navigation.finishPageTurn(outcome, fallbackProgression: progression,
+            isActive: { self.isNavigationActive }) { event in
+            switch event {
+            case .committed(let position): progression = position.progression
+            case .failed(let error): self.error = error.localizedDescription
+            case .cancelTransition(let error):
                 container.cancelPageTransition()
                 self.error = error.localizedDescription
-            } else {
-                self.error = error.localizedDescription
-                recovery.recover(navigation)
+            case .discarded: resumePendingLocationCapture()
             }
         }
     }
 
     func pageTurnWasCancelled(needsRestoration: Bool) {
-        guard let navigation = positions.pageTurn else { return }
-        if needsRestoration { recovery.recover(navigation) }
-        else { discardPageTurn(navigation) }
-    }
-
-    private func discardPageTurn(_ navigation: ReaderPositionSession.Navigation) {
-        positions.finishNavigation(navigation)
-        positions.scheduleCapture { [weak self] locator, revision in
-            await self?.captureEPUB(locator, revision: revision)
+        if navigation.cancelPageTurn(needsRestoration: needsRestoration) {
+            resumePendingLocationCapture()
         }
     }
 
-    private func ownsNavigation(_ navigation: ReaderPositionSession.Navigation) -> Bool {
-        isActive && !closed && positions.origin(of: navigation) != nil
+    private func resumePendingLocationCapture() {
+        positions.scheduleCapture { [weak self] locator, revision in
+            await self?.captureEPUB(locator, revision: revision)
+        }
     }
 
     private func locationChanged(_ locator: Locator) {
@@ -337,12 +300,11 @@ import ReadiumShared
     }
     func close() async {
         progressSync.discardAutomaticCheck()
-        let turn = positions.pageTurn
-        if let turn { positions.finishNavigation(turn) }
+        let interruptedTurn = navigation.abandonPageTurnForClose()
         container.cancelPageTransition()
         positions.movementBegan()
         // The viewport can still show an unconfirmed turn. Its origin was saved at the start.
-        if turn == nil { await flush() }
+        if !interruptedTurn { await flush() }
         closed = true
         progressSync.discardAutomaticCheck()
         renderer.close()
@@ -376,31 +338,21 @@ import ReadiumShared
         await resumeWhenVisible()
     }
     func turn(forward: Bool) async {
-        let towardLeft = epub?.towardLeft(forward: forward) ?? forward
-        await container.turnPage(towardLeft: towardLeft)
+        await container.turnPage(towardLeft: navigation.pageTurnDirection(forward: forward))
     }
 
     func canBeginPageTurn(isGesture: Bool) -> Bool {
-        guard ready, isActive, !closed, positions.activity == .idle else { return false }
-        if let epub { return epub.canBeginPageTurn(isGesture: isGesture) }
-        return !isGesture && pdf != nil
+        ready && isNavigationActive && navigation.canBeginPageTurn(isGesture: isGesture)
     }
 
     func pageTurnWillBegin() {
-        guard canBeginPageTurn(isGesture: false) else { return }
+        guard ready, isNavigationActive else { return }
         navigation.beginPageTurn { error = $0.localizedDescription }
     }
 
     func movePage(towardLeft: Bool) async throws -> Bool {
-        guard let navigation = positions.pageTurn, ownsNavigation(navigation) else { return false }
-        if let epub {
-            return try await epub.movePage(towardLeft: towardLeft) {
-                self.ownsNavigation(navigation) && self.epub === epub
-            }
-        }
-        guard let pdf else { return false }
-        return try await pdf.turn(forward: towardLeft) {
-            self.ownsNavigation(navigation) && self.pdf === pdf
+        try await navigation.movePage(towardLeft: towardLeft) {
+            self.isNavigationActive
         }
     }
 

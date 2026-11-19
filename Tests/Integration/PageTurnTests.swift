@@ -3,7 +3,7 @@ import PDFKit
 @testable import SimpleReader
 
 @MainActor final class PageTurnTests: XCTestCase {
-    func testCompletedPDFTurnPersistsNextPageAsPendingProgress() async throws {
+    func testPDFButtonTurnPersistsMovementAndPreservesHistoryAtEnd() async throws {
         let store = try library()
         let source = try pdfFile(in: temporaryDirectory())
         let readium = ReadiumService()
@@ -21,6 +21,21 @@ import PDFKit
         XCTAssertEqual(store.book(book.id)?.position?.pdfPage, 1)
         XCTAssertEqual(store.book(book.id)?.pendingSync, true)
         XCTAssertFalse(session.container.isTurningPage)
+
+        let lastPage = try XCTUnwrap(session.pdfPageCount)
+        let jumped = await session.jump(toPage: lastPage)
+        XCTAssertTrue(jumped)
+        let savedEnd = try XCTUnwrap(store.book(book.id)?.position)
+        await session.turn(forward: true)
+        XCTAssertEqual(session.currentPDFPage, lastPage)
+        XCTAssertEqual(store.book(book.id)?.position, savedEnd)
+        XCTAssertTrue(session.canReturnToPreviousPosition)
+        XCTAssertFalse(session.container.isTurningPage)
+        XCTAssertTrue(session.container.view.isUserInteractionEnabled)
+
+        await session.returnToPreviousPosition()
+        XCTAssertEqual(session.currentPDFPage, 2)
+        XCTAssertFalse(session.canReturnToPreviousPosition)
         await session.close()
     }
 
