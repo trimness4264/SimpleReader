@@ -3,6 +3,77 @@ import PDFKit
 @testable import SimpleReader
 
 @MainActor final class PageTurnTests: XCTestCase {
+    func testReplacingContentCancelsOldTurnWithoutUnlockingNextTurn() async throws {
+        try XCTSkipIf(UIAccessibility.isReduceMotionEnabled, "This regression exercises animated snapshots.")
+        let controller = ReaderContainerController()
+        let window = present(controller)
+        window.windowScene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let delegate = SuspendedTurnDelegate()
+        controller.pageTurnDelegate = delegate
+        let original = UIViewController()
+        let replacement = UIViewController()
+        original.view.backgroundColor = .white
+        replacement.view.backgroundColor = .white
+        controller.replaceChild(with: original)
+
+        let firstStarted = expectation(description: "Original turn reached navigation")
+        let (firstGate, releaseFirst) = AsyncStream<Void>.makeStream()
+        defer { releaseFirst.finish() }
+        delegate.onMove = {
+            firstStarted.fulfill()
+            for await _ in firstGate { break }
+            return true
+        }
+        let firstTurn = Task { await controller.turnPage(towardLeft: true) }
+        await fulfillment(of: [firstStarted], timeout: 10)
+        XCTAssertEqual(controller.view.subviews.count, 2)
+
+        controller.onPageTurnEnded = { [weak controller] in
+            guard let controller else { return }
+            XCTAssertFalse(controller.isTurningPage)
+            XCTAssertFalse(controller.beginPageTurn(translation: CGPoint(x: -30, y: 0)))
+            XCTAssertFalse(controller.view.isUserInteractionEnabled)
+        }
+        controller.replaceChild(with: replacement)
+        XCTAssertEqual(delegate.cancellations, [true])
+        XCTAssertFalse(controller.isTurningPage)
+        XCTAssertTrue(controller.view.isUserInteractionEnabled)
+        XCTAssertEqual(controller.view.subviews, [replacement.view])
+        XCTAssertEqual(original.view.transform, .identity)
+
+        let nextStarted = expectation(description: "Replacement turn reached navigation")
+        let (nextGate, releaseNext) = AsyncStream<Void>.makeStream()
+        defer { releaseNext.finish() }
+        delegate.onMove = {
+            nextStarted.fulfill()
+            for await _ in nextGate { break }
+            return true
+        }
+        let nextTurn = Task { await controller.turnPage(towardLeft: true) }
+        await fulfillment(of: [nextStarted], timeout: 10)
+        let nextSubviews = controller.view.subviews
+        XCTAssertEqual(nextSubviews.count, 2)
+        releaseFirst.finish()
+        await firstTurn.value
+        XCTAssertEqual(controller.view.subviews, nextSubviews)
+        XCTAssertTrue(controller.isTurningPage)
+        XCTAssertFalse(controller.view.isUserInteractionEnabled)
+        XCTAssertTrue(delegate.outcomes.isEmpty)
+
+        releaseNext.finish()
+        await nextTurn.value
+        XCTAssertEqual(delegate.outcomes.count, 1)
+        guard case .settled? = delegate.outcomes.first else {
+            return XCTFail("The replacement turn did not settle")
+        }
+        XCTAssertFalse(controller.isTurningPage)
+        XCTAssertTrue(controller.view.isUserInteractionEnabled)
+        XCTAssertEqual(controller.view.subviews, [replacement.view])
+        XCTAssertEqual(replacement.view.transform, .identity)
+    }
+
     func testPDFButtonTurnPersistsMovementAndPreservesHistoryAtEnd() async throws {
         let store = try library()
         let source = try pdfFile(in: temporaryDirectory())
@@ -190,4 +261,16 @@ import PDFKit
         XCTAssertEqual(view.convert(page.bounds(for: view.displayBox), from: page).minY, insets.top, accuracy: 2)
         await session.close()
     }
+}
+
+@MainActor private final class SuspendedTurnDelegate: ReaderPageTurnDelegate {
+    var onMove: () async -> Bool = { false }
+    private(set) var outcomes: [PageTurnOutcome] = []
+    private(set) var cancellations: [Bool] = []
+
+    func canBeginPageTurn(isGesture: Bool) -> Bool { true }
+    func pageTurnWillBegin() {}
+    func movePage(towardLeft: Bool) async throws -> Bool { await onMove() }
+    func pageTurnDidFinish(_ outcome: PageTurnOutcome) async { outcomes.append(outcome) }
+    func pageTurnWasCancelled(needsRestoration: Bool) { cancellations.append(needsRestoration) }
 }
