@@ -29,6 +29,7 @@ import ReadiumShared
     private(set) var bookFormat: BookFormat?
     private(set) var readerSettings: ReaderSettings
     private let positions: ReaderPositionSession
+    private let navigation: ReaderNavigation
     @ObservationIgnored private lazy var progressSync = ReaderSyncSession(
         bookID: bookID, coordinator: sync, positions: positions,
         availability: { [weak self] in self?.syncAvailability ?? .unavailable },
@@ -54,6 +55,7 @@ import ReadiumShared
         bookFormat = store.book(bookID)?.format
         readerSettings = store.settings.reader
         positions = ReaderPositionSession(bookID: bookID, store: store, sync: sync)
+        navigation = ReaderNavigation(renderer: renderer, positions: positions)
         progression = positions.current?.progression ?? 0
         positions.onActivityChanged = { [weak self] activity in
             guard let self = self else { return }
@@ -230,6 +232,10 @@ import ReadiumShared
 
     private func recover(_ navigation: ReaderPositionSession.Navigation) {
         positions.recover(navigation)
+        scheduleNavigationRecovery()
+    }
+
+    private func scheduleNavigationRecovery() {
         epub?.cancelNavigation()
         scheduleRestoration()
     }
@@ -306,18 +312,21 @@ import ReadiumShared
         }
 
         do {
-            let destination: NavigationDestination
-            if let pdf, let position = pdf.position() {
-                destination = NavigationDestination(position: position)
+            let position: ReadingPosition
+            let locator: Locator?
+            if let pdf, let settledPosition = pdf.position() {
+                position = settledPosition
+                locator = nil
             } else if let epub, let captured = try await epub.capture(.settledPage, fallbackProgression: progression) {
                 guard ownsNavigation(navigation), self.epub === epub else { return }
-                destination = NavigationDestination(position: captured.position, locator: captured.locator)
+                position = captured.position
+                locator = captured.locator
             } else {
                 recover(navigation)
                 return
             }
-            try positions.commitNavigation(navigation, position: destination.position, from: .movement, locator: destination.locator)
-            progression = destination.position.progression
+            try positions.commitNavigation(navigation, position: position, from: .movement, locator: locator)
+            progression = position.progression
         } catch {
             guard ownsNavigation(navigation) else { return }
             if error is CancellationError {
@@ -453,7 +462,7 @@ import ReadiumShared
 
     func pageTurnWillBegin() {
         guard canBeginPageTurn(isGesture: false) else { return }
-        _ = beginNavigation(.pageTurn)
+        navigation.beginPageTurn { error = $0.localizedDescription }
     }
 
     func movePage(towardLeft: Bool) async throws -> Bool {
@@ -495,129 +504,41 @@ import ReadiumShared
         return succeeded && currentPDFPage == page
     }
     func returnToPreviousPosition() async {
-        guard let previousPosition = positions.previous else { return }
-        await navigate(to: .checkpoint(previousPosition), returning: true)
-    }
-
-    private enum NavigationTarget {
-        case progression(Double), link(ReadiumShared.Link), page(Int), checkpoint(Checkpoint)
-    }
-    @discardableResult
-    private func move(to target: NavigationTarget, isCurrent: @MainActor () -> Bool) async throws -> ReadingPosition? {
-        if let epub {
-            switch target {
-            case .progression(let value):
-                try await epub.move(to: .progression(value), isCurrent: isCurrent)
-            case .link(let link):
-                try await epub.move(to: .link(link), isCurrent: isCurrent)
-            case .checkpoint(let saved):
-                try await epub.move(to: .checkpoint(saved.locator, pointer: saved.position?.xpointer), isCurrent: isCurrent)
-            case .page:
-                throw AppFailure("Couldn’t jump to the selected position.")
-            }
-            return nil
-        } else if let pdf = pdf {
-            switch target {
-            case .page(let index):
-                return try await pdf.move(to: .page(index)) { isCurrent() && self.pdf === pdf }
-            case .checkpoint(let saved):
-                guard let checkpoint = saved.pdf else { throw AppFailure("Couldn’t return to the previous position.") }
-                return try await pdf.move(to: .checkpoint(checkpoint)) { isCurrent() && self.pdf === pdf }
-            default: throw AppFailure("Couldn’t jump to the selected position.")
-            }
-        }
-        throw AppFailure("Couldn’t jump to the selected position.")
-    }
-
-    private struct NavigationDestination {
-        let position: ReadingPosition
-        var locator: Locator?
-    }
-
-    private func beginNavigation(_ kind: ReaderPositionSession.Navigation.Kind) -> ReaderPositionSession.Navigation {
-        savePendingLocation()
-        // A settled turn records its locator before Readium publishes the location change.
-        let locator = kind == .pageTurn
-            ? positions.latestLocator ?? epub?.currentLocation
-            : epub?.currentLocation ?? positions.latestLocator
-        let origin = Checkpoint(position: positions.current, locator: locator, pdf: pdf?.checkpoint(at: nil))
-        return positions.beginNavigation(kind, from: origin)
+        guard let previous = positions.previous else { return }
+        await performNavigation(.returning(to: previous)) { self.error = $0.localizedDescription }
     }
 
     @discardableResult
-    private func navigate(
-        from source: ReaderPositionSession.Source,
-        history: ReaderPositionSession.History = .unchanged,
-        _ operation: @MainActor (@MainActor () -> Bool) async throws -> NavigationDestination,
-        onFailure: (Error) -> Void
-    ) async -> Bool {
-        guard ready, isActive, !closed, positions.activity == .idle, !container.isTurningPage else { return false }
-        let epub = epub
-        let pdf = pdf
+    private func performNavigation(_ request: ReaderNavigation.Request, onFailure: @MainActor (Error) -> Void) async -> Bool {
         let visibilityRevision = visibilityRevision
-        let navigation = beginNavigation(.jump)
-        defer { positions.finishNavigation(navigation) }
-        func ownsRenderer() -> Bool { ownsNavigation(navigation) && self.epub === epub && self.pdf === pdf }
-        func isCurrent() -> Bool {
-            guard ownsRenderer(), !Task.isCancelled else { return false }
-            if case .remote = source { return isReaderVisible && self.visibilityRevision == visibilityRevision }
-            return true
+        let succeeded = await navigation.perform(request, fallbackProgression: progression,
+            isActive: { self.ready && self.isActive && !self.closed },
+            isStillVisible: { self.isReaderVisible && self.visibilityRevision == visibilityRevision }) { event in
+            switch event {
+            case .originSaveFailed(let error):
+                self.error = error.localizedDescription
+            case .committed(let position):
+                progression = position.progression
+                canReturnToPreviousPosition = positions.previous != nil
+                if request.isRemote { bridgeWarning = nil }
+                else if epub != nil { updateBridgeWarning() }
+            case .rolledBack(let origin, let error):
+                progression = origin?.progression ?? progression
+                onFailure(error)
+            case .restorationNeeded:
+                scheduleNavigationRecovery()
+            }
         }
-        do {
-            if let epub, let origin = positions.origin(of: navigation), let locator = origin.locator {
-                let captured = try await epub.capture(.origin(locator, saved: origin.position), fallbackProgression: progression)
-                guard isCurrent() else { throw CancellationError() }
-                if let captured {
-                    positions.refineOrigin(Checkpoint(position: captured.position, locator: captured.locator, pdf: nil), for: navigation)
-                }
-            }
-            let destination = try await operation(isCurrent)
-            guard isCurrent() else { throw CancellationError() }
-            try positions.commitNavigation(navigation, position: destination.position, from: source,
-                locator: destination.locator, history: history)
-            progression = destination.position.progression
-            canReturnToPreviousPosition = positions.previous != nil
-            switch source {
-            case .movement where epub != nil: updateBridgeWarning()
-            case .remote: bridgeWarning = nil
-            default: break
-            }
-            return true
-        } catch {
-            guard ownsRenderer(), let origin = positions.origin(of: navigation) else { return false }
-            if isCurrent(), !(error is CancellationError) {
-                do {
-                    try await move(to: .checkpoint(origin), isCurrent: isCurrent)
-                    guard isCurrent() else { throw CancellationError() }
-                    progression = origin.position?.progression ?? progression
-                    onFailure(error)
-                    return false
-                } catch {
-                    guard ownsRenderer() else { return false }
-                }
-            }
-            recover(navigation)
-            return false
-        }
+        if !request.isRemote, !closed, positions.activity == .idle { await refreshContentsPosition() }
+        return succeeded
     }
 
     @discardableResult
-    private func navigate(to target: NavigationTarget, returning: Bool = false, onFailure: ((Error) -> Void)? = nil) async -> Bool {
-        let succeeded = await navigate(from: .movement, history: returning ? .returning : .rememberOrigin) { isCurrent in
-            let epub = epub
-            let pdfPosition = try await move(to: target, isCurrent: isCurrent)
-            guard isCurrent() else { throw CancellationError() }
-            if let epub, let captured = try await epub.capture(.navigation, fallbackProgression: progression) {
-                return NavigationDestination(position: captured.position, locator: captured.locator)
-            }
-            if let pdfPosition { return NavigationDestination(position: pdfPosition) }
-            throw AppFailure("Couldn’t jump to the selected position.")
-        } onFailure: { error in
+    private func navigate(to target: ReaderNavigation.Target, onFailure: ((Error) -> Void)? = nil) async -> Bool {
+        await performNavigation(.jump(target)) { error in
             if let onFailure { onFailure(error) }
             else { self.error = error.localizedDescription }
         }
-        if !closed, positions.activity == .idle { await refreshContentsPosition() }
-        return succeeded
     }
 
     func synchronize() async {
@@ -641,19 +562,8 @@ import ReadiumShared
 
     private func moveToRemotePosition(_ remote: RemoteProgress, approximate: Bool,
                                       onFailure: @MainActor (ReaderSyncSession.RemoteMoveFailure) -> Void) async {
-        await navigate(from: .remote(remote)) { isCurrent in
-            if let epub {
-                let captured = try await epub.remoteSnapshot(remote, approximate: approximate, isCurrent: isCurrent)
-                return NavigationDestination(position: captured.position, locator: captured.locator)
-            } else {
-                guard let raw = remote.progress, let page = Int(raw), let pdf = pdf, (1...pdf.pageCount).contains(page) else {
-                    throw AppFailure("The remote PDF page number is outside this book’s range.")
-                }
-                let position = try await pdf.move(to: .page(page - 1)) { isCurrent() && self.pdf === pdf }
-                return NavigationDestination(position: position)
-            }
-        } onFailure: { error in
-            onFailure(.init(error: error, canApproximate: epub != nil))
+        await performNavigation(.remote(remote, approximate: approximate)) { error in
+            onFailure(.init(error: error, canApproximate: self.epub != nil))
         }
     }
 }

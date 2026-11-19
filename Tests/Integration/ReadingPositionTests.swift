@@ -309,6 +309,43 @@ import UIKit
         await session.close()
     }
 
+    func testFailedRemotePDFJumpPreservesLocalPositionAndReturnHistory() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
+        let server = ProgressServer()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+        let window = present(session.container)
+        defer { window.isHidden = true }
+        await session.load()
+        let jumped = await session.jump(toPage: 3)
+        XCTAssertTrue(jumped)
+        let saved = try XCTUnwrap(store.book(book.id)?.position)
+        XCTAssertTrue(session.canReturnToPreviousPosition)
+
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+        server.remote = RemoteProgress(progress: "99", percentage: 1, timestamp: 200, device_id: "other")
+        await session.synchronize()
+        let conflict = try XCTUnwrap(session.prompt)
+        await session.respond(to: conflict, with: .useServer)
+
+        XCTAssertNotNil(session.syncError)
+        XCTAssertNil(session.prompt)
+        XCTAssertFalse(session.isNavigating)
+        XCTAssertEqual(session.currentPDFPage, 3)
+        XCTAssertEqual(store.book(book.id)?.position, saved)
+        XCTAssertNil(store.book(book.id)?.remoteBaseline)
+        XCTAssertTrue(session.canReturnToPreviousPosition)
+
+        await session.returnToPreviousPosition()
+        XCTAssertEqual(session.currentPDFPage, 1)
+        XCTAssertFalse(session.canReturnToPreviousPosition)
+        await session.close()
+    }
+
     func testRendererIgnoresEventsFromReplacedAndClosedEPUBs() async throws {
         let store = try library()
         let readium = ReadiumService()
