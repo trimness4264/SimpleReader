@@ -9,13 +9,6 @@ struct ContentsItem: Identifiable {
     let link: ReadiumShared.Link?
     let pdfPage: Int?
 }
-struct SyncPrompt: Identifiable {
-    enum Kind { case conflict, approximate }
-    let id = UUID()
-    let kind: Kind
-    let remote: RemoteProgress
-    let revision: Int
-}
 @Observable @MainActor final class ReaderSession: ReaderPageTurnDelegate {
     let bookID: UUID
     let container = ReaderContainerController()
@@ -28,13 +21,12 @@ struct SyncPrompt: Identifiable {
     private(set) var recoveryError: String?
     var error: String?
     var bridgeWarning: String?
-    private var syncNotice: String?
-    private(set) var syncError: String?
-    var syncMessage: String? { syncError ?? syncNotice }
+    var syncError: String? { progressSync.error }
+    var syncMessage: String? { progressSync.message }
     var progression: Double = 0
     var contents: [ContentsItem] = []
     private(set) var currentContentsID: UUID?
-    var prompt: SyncPrompt?
+    var prompt: SyncPrompt? { progressSync.prompt }
     private let store: LibraryStore
     private let readium: ReadiumService
     let sync: SyncCoordinator
@@ -43,6 +35,13 @@ struct SyncPrompt: Identifiable {
     private(set) var bookFormat: BookFormat?
     private(set) var readerSettings: ReaderSettings
     private let positions: ReaderPositionSession
+    @ObservationIgnored private lazy var progressSync = ReaderSyncSession(
+        bookID: bookID, coordinator: sync, positions: positions,
+        availability: { [weak self] in self?.syncAvailability ?? .unavailable },
+        flush: { [weak self] in await self?.flush() },
+        move: { [weak self] remote, approximate, onFailure in
+            await self?.moveToRemotePosition(remote, approximate: approximate, onFailure: onFailure)
+        })
     private enum ActiveReader {
         case epub(EPUBReader), pdf(PDFReader)
     }
@@ -57,14 +56,12 @@ struct SyncPrompt: Identifiable {
     }
     private var scrollInsets: UIEdgeInsets?
     private var loading = false
-    private var busySync = false
     private var closed = false
-    private var offeredApproximateFingerprint: String?
     private var displaysTwoPages = false
     private var isActive = true
     // Allow recovery during initial layout until UIKit reports a disappearance.
     private var isReaderVisible = true
-    private var needsForegroundSync = false
+    @ObservationIgnored private var visibilityRevision = 0
     private var reloadNavigatorOnRecovery = false
     private typealias Checkpoint = ReaderPositionSession.Checkpoint
 
@@ -80,19 +77,22 @@ struct SyncPrompt: Identifiable {
             self.isRestoring = activity == .restoring
             self.isNavigating = activity == .navigating
             self.container.allowsContentInteraction = !self.closed && activity != .navigating && activity != .restoring
+            if activity == .idle { self.progressSync.scheduleAutomaticCheck() }
         }
         container.onLayout = { [weak self] size, idiom in
             self?.updatePageLayout(size: size, idiom: idiom)
         }
         container.onLayoutWillChange = { [weak self] in self?.protectPosition() }
         container.onLayoutDidChange = { [weak self] in self?.scheduleRestoration() }
+        container.onPageTurnEnded = { [weak self] in self?.progressSync.scheduleAutomaticCheck() }
         container.onVisibilityChanged = { [weak self] visible in
             guard let self else { return }
             self.isReaderVisible = visible
             if visible {
                 Task { [weak self] in await self?.resumeWhenVisible() }
-            } else if self.positions.activity == .restoring {
-                self.positions.invalidate()
+            } else {
+                self.visibilityRevision += 1
+                if self.positions.activity == .restoring { self.positions.invalidate() }
             }
         }
         container.onAppearanceChange = { [weak self] in
@@ -181,7 +181,7 @@ struct SyncPrompt: Identifiable {
             try await initialCheckpoint()
             guard !closed else { return }
             ready = true
-            await synchronize(flushFirst: false)
+            await progressSync.checkOnOpen()
         } catch is CancellationError {
         } catch { self.error = error.localizedDescription }
     }
@@ -296,7 +296,7 @@ struct SyncPrompt: Identifiable {
     @discardableResult
     private func scheduleRestoration() -> Task<Void, Never>? {
         guard isActive, isReaderVisible, !closed else { return nil }
-        let restoration = positions.restore { [weak self] checkpoint, revision in
+        return positions.restore { [weak self] checkpoint, revision in
             guard let self = self else { return }
             do {
                 try await self.restorePosition(checkpoint, revision: revision)
@@ -306,12 +306,6 @@ struct SyncPrompt: Identifiable {
                 guard self.isCurrent(revision) else { return }
                 self.recoveryError = error.localizedDescription
             }
-        }
-        guard needsForegroundSync, let restoration else { return restoration }
-        // Every scheduled recovery can resume sync, even if it superseded an earlier task.
-        return Task { [weak self] in
-            await restoration.value
-            await self?.synchronizeAfterRestorationIfNeeded()
         }
     }
     private func isCurrent(_ revision: Int) -> Bool {
@@ -454,6 +448,7 @@ struct SyncPrompt: Identifiable {
         }
     }
     func close() async {
+        progressSync.discardAutomaticCheck()
         let turn = positions.pageTurn
         if let turn { positions.finishNavigation(turn) }
         container.cancelPageTransition()
@@ -461,9 +456,10 @@ struct SyncPrompt: Identifiable {
         // The viewport can still show an unconfirmed turn. Its origin was saved at the start.
         if turn == nil { await flush() }
         closed = true
+        progressSync.discardAutomaticCheck()
         epub?.close()
         positions.invalidate()
-        await synchronize(flushFirst: false, applyRemote: false)
+        await progressSync.synchronize(.leaving)
     }
     func resignActive() {
         guard !closed else { return }
@@ -480,9 +476,9 @@ struct SyncPrompt: Identifiable {
     func background() async {
         guard !closed else { return }
         resignActive()
-        needsForegroundSync = true
+        progressSync.requestForegroundCheck()
         await flush()
-        await synchronize(flushFirst: false, applyRemote: false)
+        await progressSync.synchronize(.leaving)
     }
     func foreground() async {
         guard !closed else { return }
@@ -490,17 +486,8 @@ struct SyncPrompt: Identifiable {
         await resumeWhenVisible()
     }
     private func resumeWhenVisible() async {
-        if let restoration = scheduleRestoration() {
-            await restoration.value
-        } else {
-            await synchronizeAfterRestorationIfNeeded()
-        }
-    }
-    private func synchronizeAfterRestorationIfNeeded() async {
-        guard isActive, isReaderVisible, !closed else { return }
-        guard needsForegroundSync, !isRestoring else { return }
-        needsForegroundSync = false
-        await synchronize()
+        await scheduleRestoration()?.value
+        await progressSync.resumeAutomaticCheck()
     }
     func retryRecovery() async {
         guard !closed else { return }
@@ -622,10 +609,15 @@ struct SyncPrompt: Identifiable {
         guard ready, isActive, !closed, positions.activity == .idle, !container.isTurningPage else { return false }
         let epub = epub
         let pdf = pdf
+        let visibilityRevision = visibilityRevision
         let navigation = beginNavigation(.jump)
         defer { positions.finishNavigation(navigation) }
         func ownsRenderer() -> Bool { ownsNavigation(navigation) && self.epub === epub && self.pdf === pdf }
-        func isCurrent() -> Bool { ownsRenderer() && !Task.isCancelled }
+        func isCurrent() -> Bool {
+            guard ownsRenderer(), !Task.isCancelled else { return false }
+            if case .remote = source { return isReaderVisible && self.visibilityRevision == visibilityRevision }
+            return true
+        }
         do {
             if let epub, let origin = positions.origin(of: navigation), let locator = origin.locator {
                 let captured = try await epub.capture(.origin(locator, saved: origin.position), fallbackProgression: progression)
@@ -683,47 +675,27 @@ struct SyncPrompt: Identifiable {
         return succeeded
     }
 
-    func synchronize(preferLocal: Bool = false, flushFirst: Bool = true, userInitiated: Bool = false, applyRemote: Bool = true) async {
-        guard ready, !busySync, !isNavigating, positions.activity != .turningPage,
-              (!isRestoring || !applyRemote), !container.isTurningPage, prompt == nil else { return }
-        busySync = true; defer { busySync = false }
-        let revision = positions.movementRevision
-        syncNotice = nil
-        syncError = nil
-        do {
-            // Save the latest page before the coordinator takes a snapshot.
-            if flushFirst { await flush() }
-            if let error = positions.persistenceError { throw error }
-            let outcome = try await sync.synchronize(bookID, preferLocal: preferLocal)
-            switch outcome {
-            case .idle: break
-            case .conflict(let remote), .remote(let remote):
-                // A network response must not override a turn made while awaiting it,
-                // even if the 400 ms position capture has not reached the store yet.
-                guard applyRemote, canApplyRemote(revision: revision) else {
-                    syncNotice = String(localized: "Your current reading position was kept. Sync again later.")
-                    return
-                }
-                if case .conflict = outcome {
-                    prompt = SyncPrompt(kind: .conflict, remote: remote, revision: revision)
-                } else if !userInitiated && remote.fingerprint == offeredApproximateFingerprint {
-                    syncNotice = String(localized: "Couldn’t resolve the exact remote position. Local progress was kept.")
-                } else {
-                    await receive(remote, revision: revision)
-                }
-            }
-        } catch { syncError = String(localized: "Sync failed: \(error.localizedDescription)") }
-    }
-    private func canApplyRemote(revision: Int) -> Bool {
-        !closed && isActive && !Task.isCancelled && positions.activity == .idle &&
-            !container.isTurningPage && epub?.isUserScrolling != true && pdf?.isScrolling != true &&
-            positions.movementRevision == revision
+    func synchronize() async {
+        await progressSync.synchronize(.manual)
     }
 
-    func receive(_ remote: RemoteProgress, approximate: Bool = false, revision: Int? = nil) async {
-        guard ready, canApplyRemote(revision: revision ?? positions.movementRevision) else { return }
-        syncNotice = nil
-        syncError = nil
+    private var syncAvailability: ReaderSyncSession.Availability {
+        guard ready, !container.isTurningPage else { return .unavailable }
+        switch positions.activity {
+        case .navigating, .turningPage: return .unavailable
+        case .restoring: return .restoring
+        case .idle:
+            guard isActive, isReaderVisible, !closed else { return .inactive }
+            return .reading(isScrolling: epub?.isUserScrolling == true || pdf?.isScrolling == true)
+        }
+    }
+
+    func respond(to prompt: SyncPrompt, with response: SyncPrompt.Response) async {
+        await progressSync.respond(to: prompt, with: response)
+    }
+
+    private func moveToRemotePosition(_ remote: RemoteProgress, approximate: Bool,
+                                      onFailure: @MainActor (ReaderSyncSession.RemoteMoveFailure) -> Void) async {
         await navigate(from: .remote(remote)) { isCurrent in
             if let epub {
                 let captured = try await epub.remoteSnapshot(remote, approximate: approximate, isCurrent: isCurrent)
@@ -736,11 +708,7 @@ struct SyncPrompt: Identifiable {
                 return NavigationDestination(position: position)
             }
         } onFailure: { error in
-            syncError = String(localized: "Sync failed: \(error.localizedDescription)")
-            if epub != nil && !approximate {
-                offeredApproximateFingerprint = remote.fingerprint
-                prompt = SyncPrompt(kind: .approximate, remote: remote, revision: positions.movementRevision)
-            }
+            onFailure(.init(error: error, canApproximate: epub != nil))
         }
     }
 }

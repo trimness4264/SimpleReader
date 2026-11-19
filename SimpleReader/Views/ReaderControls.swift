@@ -98,7 +98,7 @@ private struct ReaderOptionsMenu: View {
         Menu {
             Text(session.syncMessage ?? sync.status)
             Button {
-                Task { await session.synchronize(userInitiated: true) }
+                Task { await session.synchronize() }
             } label: { Label("Sync Reading Progress", systemImage: "arrow.triangle.2.circlepath") }
             Toggle("Show Compact Progress Indicator", isOn: preferences.$showProgress)
             if !session.isScrolling { Toggle("Show Page Turn Buttons", isOn: preferences.$showPageButtons) }
@@ -192,7 +192,7 @@ private struct ReaderSyncBanner: View {
             }
         }
         .alert("Sync Failed", isPresented: $showSyncStatus) {
-            Button("Retry") { Task { await session.synchronize(userInitiated: true) } }
+            Button("Retry") { Task { await session.synchronize() } }
             Button("Close", role: .cancel) {}
         } message: { Text(session.syncMessage ?? sync.status) }
     }

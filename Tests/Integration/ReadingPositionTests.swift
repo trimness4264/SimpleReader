@@ -1,4 +1,5 @@
 import XCTest
+import PDFKit
 import ReadiumShared
 import ReadiumNavigator
 import UIKit
@@ -161,6 +162,150 @@ import UIKit
         XCTAssertEqual(session.currentPDFPage, 1)
         XCTAssertNil(store.book(book.id)?.remoteBaseline)
         server.onRead = nil
+        await session.close()
+    }
+
+    func testForegroundCheckWaitsForBackgroundUpload() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
+        let server = ProgressServer()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+        let window = present(session.container)
+        defer { window.isHidden = true }
+        await session.load()
+        let jumped = await session.jump(toPage: 2)
+        XCTAssertTrue(jumped)
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+
+        let uploadStarted = expectation(description: "Background upload started")
+        let (upload, releaseUpload) = AsyncStream<Void>.makeStream()
+        defer { releaseUpload.finish() }
+        var reads = 0
+        server.onRead = { reads += 1 }
+        server.onUpload = {
+            uploadStarted.fulfill()
+            for await _ in upload { break }
+        }
+        let background = Task { await session.background() }
+        await fulfillment(of: [uploadStarted], timeout: 10)
+
+        let foregroundReturned = expectation(description: "Reader resumed while upload was pending")
+        let foreground = Task {
+            await session.foreground()
+            foregroundReturned.fulfill()
+        }
+        await fulfillment(of: [foregroundReturned], timeout: 10)
+        XCTAssertEqual(reads, 1)
+        releaseUpload.finish()
+        await foreground.value
+        await background.value
+
+        // Background read, upload confirmation, and the deferred foreground check.
+        XCTAssertEqual(reads, 3)
+        XCTAssertEqual(session.currentPDFPage, 2)
+        XCTAssertEqual(store.book(book.id)?.pendingSync, false)
+        await session.close()
+    }
+
+    func testRemoteResponseCannotMoveHiddenReader() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
+        let server = ProgressServer()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+        let window = present(session.container)
+        defer { window.isHidden = true }
+        await session.load()
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+        server.remote = RemoteProgress(progress: "5", percentage: 1, timestamp: 200, device_id: "other")
+        server.onRead = {
+            session.container.beginAppearanceTransition(false, animated: false)
+            session.container.endAppearanceTransition()
+        }
+
+        await session.synchronize()
+
+        XCTAssertEqual(session.currentPDFPage, 1)
+        XCTAssertNil(session.prompt)
+        XCTAssertNil(store.book(book.id)?.remoteBaseline)
+
+        server.onRead = nil
+        session.container.beginAppearanceTransition(true, animated: false)
+        session.container.endAppearanceTransition()
+        let pdfView = try XCTUnwrap(session.container.view.subviews.compactMap { $0 as? PDFView }.first)
+        let interrupted = expectation(description: "Reader disappeared during the remote PDF move")
+        interrupted.assertForOverFulfill = false
+        let observer = NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: pdfView, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                guard session.isNavigating, let page = pdfView.currentPage, pdfView.document?.index(for: page) == 4 else { return }
+                session.container.beginAppearanceTransition(false, animated: false)
+                session.container.endAppearanceTransition()
+                session.container.beginAppearanceTransition(true, animated: false)
+                session.container.endAppearanceTransition()
+                interrupted.fulfill()
+            }
+        }
+        await session.synchronize()
+        NotificationCenter.default.removeObserver(observer)
+        await fulfillment(of: [interrupted], timeout: 10)
+
+        XCTAssertTrue(session.isRestoring)
+        XCTAssertEqual(store.book(book.id)?.position?.pdfPage, 0)
+        XCTAssertNil(store.book(book.id)?.remoteBaseline)
+
+        let restored = expectChange("Reader restored its origin on return") { _ = session.isRestoring }
+        await fulfillment(of: [restored], timeout: 10)
+        XCTAssertEqual(session.currentPDFPage, 1)
+        await session.synchronize()
+
+        XCTAssertEqual(session.currentPDFPage, 5)
+        XCTAssertEqual(store.book(book.id)?.remoteBaseline, server.remote?.fingerprint)
+        await session.close()
+    }
+
+    func testRespondingToStaleOfferResumesPendingForegroundCheck() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
+        let server = ProgressServer()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+        let window = present(session.container)
+        defer { window.isHidden = true }
+        await session.load()
+        let jumped = await session.jump(toPage: 2)
+        XCTAssertTrue(jumped)
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+        server.remote = RemoteProgress(progress: "5", percentage: 1, timestamp: 200, device_id: "other")
+        await session.synchronize()
+        let staleOffer = try XCTUnwrap(session.prompt)
+
+        await session.background()
+        await session.foreground()
+        server.remote = RemoteProgress(progress: "4", percentage: 0.8, timestamp: 201, device_id: "other")
+        await session.respond(to: staleOffer, with: .useServer)
+
+        XCTAssertEqual(session.currentPDFPage, 2)
+        let currentOffer = try XCTUnwrap(session.prompt)
+        XCTAssertEqual(currentOffer.remote.fingerprint, server.remote?.fingerprint)
+
+        await session.background()
+        await session.respond(to: currentOffer, with: .uploadLocal)
+        XCTAssertEqual(server.remote?.progress, "2")
+        XCTAssertEqual(store.book(book.id)?.pendingSync, false)
+        var checked = false
+        server.onRead = { checked = true }
+        await session.foreground()
+        XCTAssertTrue(checked)
         await session.close()
     }
 

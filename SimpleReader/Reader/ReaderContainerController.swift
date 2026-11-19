@@ -47,8 +47,11 @@ private final class ReaderContainerView: UIView {
     var onLayoutDidChange: (() -> Void)?
     var onAppearanceChange: (() -> Void)?
     var onVisibilityChanged: ((Bool) -> Void)?
+    var onPageTurnEnded: (() -> Void)?
     weak var pageTurnDelegate: ReaderPageTurnDelegate?
-    private(set) var isTurningPage = false
+    private(set) var isTurningPage = false {
+        didSet { if oldValue && !isTurningPage { onPageTurnEnded?() } }
+    }
     var allowsContentInteraction = true {
         didSet { updateContentInteraction() }
     }
