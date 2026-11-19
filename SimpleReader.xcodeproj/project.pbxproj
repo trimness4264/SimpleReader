@@ -27,6 +27,7 @@
 		00000000000000000000002C /* SimpleReader/Persistence/LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000004 /* SimpleReader/Persistence/LibraryStore.swift */; };
 		00000000000000000000002D /* SimpleReader/Reader/EPUBPositionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000005 /* SimpleReader/Reader/EPUBPositionBridge.swift */; };
 		00000000000000000000002E /* SimpleReader/Reader/ReaderSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000006 /* SimpleReader/Reader/ReaderSession.swift */; };
+		A7C180000000000000000021 /* SimpleReader/Reader/ReaderRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000022 /* SimpleReader/Reader/ReaderRenderer.swift */; };
 		A7C18000000000000000001F /* SimpleReader/Reader/ReaderSyncSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000020 /* SimpleReader/Reader/ReaderSyncSession.swift */; };
 		00000000000000000000002F /* SimpleReader/Services/BookHashing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000007 /* SimpleReader/Services/BookHashing.swift */; };
 		000000000000000000000030 /* SimpleReader/Services/BookImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000008 /* SimpleReader/Services/BookImportService.swift */; };
@@ -105,6 +106,7 @@
 		000000000000000000000004 /* SimpleReader/Persistence/LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Persistence/LibraryStore.swift; sourceTree = "<group>"; };
 		000000000000000000000005 /* SimpleReader/Reader/EPUBPositionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/EPUBPositionBridge.swift; sourceTree = "<group>"; };
 		000000000000000000000006 /* SimpleReader/Reader/ReaderSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReaderSession.swift; sourceTree = "<group>"; };
+		A7C180000000000000000022 /* SimpleReader/Reader/ReaderRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReaderRenderer.swift; sourceTree = "<group>"; };
 		A7C180000000000000000020 /* SimpleReader/Reader/ReaderSyncSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReaderSyncSession.swift; sourceTree = "<group>"; };
 		000000000000000000000007 /* SimpleReader/Services/BookHashing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/BookHashing.swift; sourceTree = "<group>"; };
 		000000000000000000000008 /* SimpleReader/Services/BookImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/BookImportService.swift; sourceTree = "<group>"; };
@@ -194,6 +196,7 @@
 				000000000000000000000004 /* SimpleReader/Persistence/LibraryStore.swift */,
 				000000000000000000000005 /* SimpleReader/Reader/EPUBPositionBridge.swift */,
 				000000000000000000000006 /* SimpleReader/Reader/ReaderSession.swift */,
+				A7C180000000000000000022 /* SimpleReader/Reader/ReaderRenderer.swift */,
 				A7C180000000000000000020 /* SimpleReader/Reader/ReaderSyncSession.swift */,
 				A7C180000000000000000016 /* SimpleReader/Reader/EPUBReader.swift */,
 				A7C180000000000000000008 /* SimpleReader/Reader/ReaderPositionSession.swift */,
@@ -398,6 +401,7 @@
 				00000000000000000000002C /* SimpleReader/Persistence/LibraryStore.swift in Sources */,
 				00000000000000000000002D /* SimpleReader/Reader/EPUBPositionBridge.swift in Sources */,
 				00000000000000000000002E /* SimpleReader/Reader/ReaderSession.swift in Sources */,
+				A7C180000000000000000021 /* SimpleReader/Reader/ReaderRenderer.swift in Sources */,
 				A7C18000000000000000001F /* SimpleReader/Reader/ReaderSyncSession.swift in Sources */,
 				A7C180000000000000000015 /* SimpleReader/Reader/EPUBReader.swift in Sources */,
 				A7C180000000000000000007 /* SimpleReader/Reader/ReaderPositionSession.swift in Sources */,

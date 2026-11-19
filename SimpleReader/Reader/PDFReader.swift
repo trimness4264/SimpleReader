@@ -52,6 +52,16 @@ import Observation
         if let observer = pageObserver { NotificationCenter.default.removeObserver(observer) }
     }
 
+    func close() {
+        if let observer = pageObserver {
+            NotificationCenter.default.removeObserver(observer)
+            pageObserver = nil
+        }
+        observedScrollView?.panGestureRecognizer.removeTarget(self, action: #selector(panChanged(_:)))
+        onMovementBegan = nil
+        onPageChanged = nil
+    }
+
     var pageCount: Int { document.pageCount }
     var isScrolling: Bool {
         guard let scroll = observedScrollView else { return false }
@@ -316,6 +326,7 @@ import Observation
     }
 
     private func pageChanged() {
+        guard pageObserver != nil else { return }
         // PDFKit may change the visible page without a change to the confirmed selection.
         withMutation(keyPath: \.page) {}
         guard isReady, !isApplyingPosition, unsettledMoves == 0, let position = position() else { return }

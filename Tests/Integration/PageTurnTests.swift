@@ -144,23 +144,35 @@ import PDFKit
     }
 
     func testPDFTwoPageLayoutKeepsTheSelectedPageAtTheReadableTop() async throws {
-        let controller = UIViewController()
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let controller = session.container
         let window = present(controller)
         defer { window.isHidden = true }
-        let source = try pdfFile(in: temporaryDirectory())
         let insets = UIEdgeInsets(top: 44, left: 0, bottom: 30, right: 0)
-        let reader = try PDFReader(url: source, in: controller.view, twoPages: false, insets: insets) { _, _ in }
-        _ = try await reader.open(at: 2, updatedAt: Date())
-        let checkpoint = try XCTUnwrap(reader.checkpoint(at: 2))
+        session.updateScrollInsets(insets)
+        await session.load()
+        let jumped = await session.jump(toPage: 3)
+        XCTAssertTrue(jumped)
+        let saved = try XCTUnwrap(store.book(book.id)?.position)
 
+        controller.traitOverrides.userInterfaceIdiom = .pad
         controller.view.frame.size = CGSize(width: 980, height: 640)
-        reader.updateLayout(twoPages: true)
-        let position = try await reader.move(to: .checkpoint(checkpoint))
+        controller.view.layoutIfNeeded()
+        XCTAssertTrue(session.isRestoring)
+        let restored = expectChange("PDF restored after changing to a two-page layout") { _ = session.isRestoring }
+        await fulfillment(of: [restored], timeout: 10)
 
         let view = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? PDFView }.first)
         let page = try XCTUnwrap(view.document?.page(at: 2))
+        XCTAssertNil(session.recoveryError)
         XCTAssertEqual(view.displayMode, .twoUpContinuous)
-        XCTAssertEqual(position.pdfPage, 2)
+        XCTAssertEqual(session.currentPDFPage, 3)
+        XCTAssertEqual(store.book(book.id)?.position, saved)
         XCTAssertEqual(view.convert(page.bounds(for: view.displayBox), from: page).minY, insets.top, accuracy: 2)
+        await session.close()
     }
 }

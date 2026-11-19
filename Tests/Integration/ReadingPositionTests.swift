@@ -309,6 +309,40 @@ import UIKit
         await session.close()
     }
 
+    func testRendererIgnoresEventsFromReplacedAndClosedEPUBs() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: epubFile())
+        var settings = ReaderSettings()
+        settings.layout = .paginated
+        let renderer = ReaderRenderer(readium: readium) { settings }
+        let window = present(renderer.container)
+        defer { renderer.close(); window.isHidden = true }
+        try await renderer.open(book, at: store.fileURL(book.filePath))
+
+        var taps = 0
+        renderer.onEvent = { event in
+            if case .epub(.toggleControls, _) = event { taps += 1 }
+        }
+        let original = try XCTUnwrap(renderer.epub)
+        let originalCallback = try XCTUnwrap(original.onEvent)
+        originalCallback(.toggleControls)
+        XCTAssertEqual(taps, 1)
+
+        settings.layout = .scroll
+        try renderer.updatePreferences(at: original.currentLocation)
+        let replacement = try XCTUnwrap(renderer.epub)
+        XCTAssertFalse(original === replacement)
+        let replacementCallback = try XCTUnwrap(replacement.onEvent)
+        originalCallback(.toggleControls)
+        replacementCallback(.toggleControls)
+        XCTAssertEqual(taps, 2)
+
+        renderer.close()
+        replacementCallback(.toggleControls)
+        XCTAssertEqual(taps, 2)
+    }
+
     func testEPUBModeChangesPreservePositionAndReturnHistory() async throws {
         let store = try library()
         let readium = ReadiumService()

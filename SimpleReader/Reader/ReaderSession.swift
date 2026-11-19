@@ -3,18 +3,12 @@ import Combine
 import Observation
 import ReadiumShared
 
-struct ContentsItem: Identifiable {
-    let id = UUID()
-    let title: String
-    let link: ReadiumShared.Link?
-    let pdfPage: Int?
-}
 @Observable @MainActor final class ReaderSession: ReaderPageTurnDelegate {
     let bookID: UUID
-    let container = ReaderContainerController()
+    var container: ReaderContainerController { renderer.container }
     private(set) var ready = false
     private(set) var controlsVisible = true
-    private(set) var supportsScrolling = false
+    var supportsScrolling: Bool { epub?.supportsScrolling ?? false }
     private(set) var isRestoring = false
     private(set) var isNavigating = false
     private(set) var canReturnToPreviousPosition = false
@@ -24,11 +18,11 @@ struct ContentsItem: Identifiable {
     var syncError: String? { progressSync.error }
     var syncMessage: String? { progressSync.message }
     var progression: Double = 0
-    var contents: [ContentsItem] = []
+    var contents: [ContentsItem] { renderer.contents }
     private(set) var currentContentsID: UUID?
     var prompt: SyncPrompt? { progressSync.prompt }
     private let store: LibraryStore
-    private let readium: ReadiumService
+    private let renderer: ReaderRenderer
     let sync: SyncCoordinator
     @ObservationIgnored private var libraryUpdates: Set<AnyCancellable> = []
     private(set) var title: String
@@ -42,22 +36,10 @@ struct ContentsItem: Identifiable {
         move: { [weak self] remote, approximate, onFailure in
             await self?.moveToRemotePosition(remote, approximate: approximate, onFailure: onFailure)
         })
-    private enum ActiveReader {
-        case epub(EPUBReader), pdf(PDFReader)
-    }
-    private var reader: ActiveReader?
-    private var epub: EPUBReader? {
-        if case .epub(let epub) = reader { return epub }
-        return nil
-    }
-    private var pdf: PDFReader? {
-        if case .pdf(let pdf) = reader { return pdf }
-        return nil
-    }
-    private var scrollInsets: UIEdgeInsets?
+    private var epub: EPUBReader? { renderer.epub }
+    private var pdf: PDFReader? { renderer.pdf }
     private var loading = false
     private var closed = false
-    private var displaysTwoPages = false
     private var isActive = true
     // Allow recovery during initial layout until UIKit reports a disappearance.
     private var isReaderVisible = true
@@ -66,7 +48,8 @@ struct ContentsItem: Identifiable {
     private typealias Checkpoint = ReaderPositionSession.Checkpoint
 
     init(bookID: UUID, store: LibraryStore, readium: ReadiumService, sync: SyncCoordinator) {
-        self.bookID = bookID; self.store = store; self.readium = readium; self.sync = sync
+        self.bookID = bookID; self.store = store; self.sync = sync
+        renderer = ReaderRenderer(readium: readium) { store.settings.reader }
         title = store.book(bookID)?.title ?? String(localized: "Reading")
         bookFormat = store.book(bookID)?.format
         readerSettings = store.settings.reader
@@ -79,9 +62,7 @@ struct ContentsItem: Identifiable {
             self.container.allowsContentInteraction = !self.closed && activity != .navigating && activity != .restoring
             if activity == .idle { self.progressSync.scheduleAutomaticCheck() }
         }
-        container.onLayout = { [weak self] size, idiom in
-            self?.updatePageLayout(size: size, idiom: idiom)
-        }
+        renderer.onEvent = { [weak self] in self?.rendererDidEmit($0) }
         container.onLayoutWillChange = { [weak self] in self?.protectPosition() }
         container.onLayoutDidChange = { [weak self] in self?.scheduleRestoration() }
         container.onPageTurnEnded = { [weak self] in self?.progressSync.scheduleAutomaticCheck() }
@@ -146,36 +127,11 @@ struct ContentsItem: Identifiable {
         currentContentsID = contentsID
     }
     func load() async {
-        guard !loading else { return }; loading = true
+        guard !loading, !closed else { return }; loading = true
         do {
             guard var book = store.book(bookID) else { throw AppFailure("The book has been deleted.") }
             book.lastOpenedAt = Date(); try store.save(book)
-            switch book.format {
-            case .epub:
-                let publication = try await readium.open(store.fileURL(book.filePath))
-                let spine: [String]
-                do { spine = try await readium.spine(store.fileURL(book.filePath)) }
-                catch { spine = []; bridgeWarning = String(localized: "Couldn’t read the original chapter order. EPUB sync is paused.") }
-                let locator = try book.position?.locatorJSON.flatMap { try Locator(jsonString: $0) }
-                let epub = try await EPUBReader(publication: publication, spine: spine,
-                    configuration: { self.epubConfiguration }, locator: locator)
-                guard !closed else { epub.close(); return }
-                try Task.checkCancellation()
-                installEPUB(epub)
-                contents = epub.contents
-            case .pdf:
-                let reader = try PDFReader(url: store.fileURL(book.filePath), in: container.view,
-                    twoPages: displaysTwoPages, insets: scrollInsets) { [weak self] point, bounds in
-                    self?.contentTapped(at: point, in: bounds)
-                }
-                reader.onMovementBegan = { [weak self] in self?.positions.movementBegan() }
-                reader.onPageChanged = { [weak self] position in
-                    guard let self = self, !self.container.isTurningPage else { return }
-                    self.pdfChanged(position)
-                }
-                self.reader = .pdf(reader)
-                contents = reader.contents
-            }
+            try await renderer.open(book, at: store.fileURL(book.filePath))
             // Allow layout and the initial location event to finish before tracking user movement.
             try await Task.sleep(nanoseconds: 350_000_000)
             try await initialCheckpoint()
@@ -183,7 +139,10 @@ struct ContentsItem: Identifiable {
             ready = true
             await progressSync.checkOnOpen()
         } catch is CancellationError {
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            guard !closed, !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+        }
     }
     private func initialCheckpoint() async throws {
         let updatedAt = positions.current?.updatedAt ?? Date()
@@ -204,23 +163,8 @@ struct ContentsItem: Identifiable {
             try commit(position, from: .checkpoint, locator: epub?.currentLocation)
         }
     }
-    private var epubConfiguration: EPUBReader.Configuration {
-        EPUBReader.Configuration(settings: store.settings.reader, twoPages: displaysTwoPages,
-            systemIsDark: container.traitCollection.userInterfaceStyle == .dark, scrollInsets: scrollInsets)
-    }
-    private func updatePageLayout(size: CGSize, idiom: UIUserInterfaceIdiom) {
-        let twoPages = ReaderPageLayout.displaysTwoPages(size: size, idiom: idiom)
-        pdf?.updateLayout(twoPages: twoPages)
-        guard displaysTwoPages != twoPages else { return }
-        displaysTwoPages = twoPages
-        epub?.updatePageLayout(twoPages: twoPages)
-    }
-
     func updateScrollInsets(_ insets: UIEdgeInsets?) {
-        guard scrollInsets != insets else { return }
-        scrollInsets = insets
-        epub?.updateScrollInsets(insets)
-        pdf?.updateScrollInsets(insets)
+        renderer.updateScrollInsets(insets)
     }
 
     func saveReaderSettings(_ change: (inout ReaderSettings) -> Void) throws {
@@ -230,21 +174,23 @@ struct ContentsItem: Identifiable {
 
     func updatePreferences() {
         protectPosition()
-        if let epub {
-            do {
-                let updated = try epub.updating(epubConfiguration, at: positions.checkpoint?.locator ?? positions.latestLocator)
-                if updated !== epub { installEPUB(updated) }
-            } catch { recoveryError = error.localizedDescription }
-        }
+        do {
+            try renderer.updatePreferences(at: positions.checkpoint?.locator ?? positions.latestLocator)
+        } catch { recoveryError = error.localizedDescription }
         scheduleRestoration()
     }
 
-    private func installEPUB(_ epub: EPUBReader) {
-        self.epub?.close()
-        reader = .epub(epub)
-        supportsScrolling = epub.supportsScrolling
-        epub.onEvent = { [weak self, weak epub] event in
-            guard let self, let epub, self.epub === epub else { return }
+    private func rendererDidEmit(_ event: ReaderRenderer.Event) {
+        switch event {
+        case .pdfPageChanged(let position):
+            pdfChanged(position)
+        case .pdfMovementBegan:
+            positions.movementBegan()
+        case .pdfTapped(let point, let bounds):
+            contentTapped(at: point, in: bounds)
+        case .missingSpine:
+            bridgeWarning = String(localized: "Couldn’t read the original chapter order. EPUB sync is paused.")
+        case .epub(let event, let epub):
             switch event {
             case .locationChanged(let locator):
                 self.locationChanged(locator)
@@ -269,7 +215,6 @@ struct ContentsItem: Identifiable {
                 self.error = error.localizedDescription
             }
         }
-        epub.install(in: container)
     }
     private func protectPosition() {
         guard ready, !closed else {
@@ -315,9 +260,9 @@ struct ContentsItem: Identifiable {
     private func restorePosition(_ checkpoint: Checkpoint, revision: Int) async throws {
         guard isCurrent(revision) else { throw CancellationError() }
         recoveryError = nil
-        if let current = epub {
+        if epub != nil {
             if reloadNavigatorOnRecovery {
-                installEPUB(try current.replacing(epubConfiguration, at: checkpoint.locator))
+                try renderer.rebuildEPUB(at: checkpoint.locator)
             }
             guard let epub, let location = checkpoint.locator else {
                 throw AppFailure("Couldn’t read the last reading position.")
@@ -457,7 +402,7 @@ struct ContentsItem: Identifiable {
         if turn == nil { await flush() }
         closed = true
         progressSync.discardAutomaticCheck()
-        epub?.close()
+        renderer.close()
         positions.invalidate()
         await progressSync.synchronize(.leaving)
     }
@@ -710,12 +655,5 @@ struct ContentsItem: Identifiable {
         } onFailure: { error in
             onFailure(.init(error: error, canApproximate: epub != nil))
         }
-    }
-}
-enum ReaderPageLayout {
-    static func displaysTwoPages(size: CGSize, idiom: UIUserInterfaceIdiom) -> Bool {
-        // Use the reader's viewport, so narrow Split View and Stage Manager windows
-        // stay readable even when the physical iPad is in landscape orientation.
-        idiom == .pad && size.width >= 700 && size.width > size.height && size.height > 0
     }
 }
