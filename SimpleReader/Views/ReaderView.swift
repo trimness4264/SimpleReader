@@ -29,18 +29,27 @@ struct ReaderView: View {
     }
     var body: some View {
         @Bindable var session = session
+        // Keep the pagination viewport and PDF scroll offset stable while the controls animate.
+        let reservesToolbarSpace = !session.isScrolling || session.controlsVisible
         GeometryReader { geometry in
-            let topBar = session.controlsVisible ? barHeights[.top, default: 0] : 0
-            let bottomBar = session.controlsVisible ? barHeights[.bottom, default: 0]
+            let topBar = reservesToolbarSpace ? barHeights[.top, default: 0] : 0
+            let bottomBar = reservesToolbarSpace ? barHeights[.bottom, default: 0]
                 : session.syncError != nil ? barHeights[.syncStatus, default: 0] : 0
+            let padsViewport = isPhone && isPagedEPUB
             let scrollInsets = isPhone && !isPagedEPUB ? UIEdgeInsets(
                 top: geometry.safeAreaInsets.top + topBar, left: 0,
                 bottom: geometry.safeAreaInsets.bottom + bottomBar, right: 0
             ) : nil
             ReaderSurface(session: session, scrollInsets: scrollInsets)
                 // Readium already reserves the window's safe area inside its pages.
-                .padding(.top, isPhone && isPagedEPUB ? topBar : 0)
-                .padding(.bottom, isPhone && isPagedEPUB ? bottomBar : 0)
+                .padding(.top, padsViewport ? topBar : 0)
+                .padding(.bottom, padsViewport ? bottomBar : 0)
+                .overlay(alignment: .top) {
+                    if padsViewport && !session.controlsVisible { toolbarMargin(height: topBar) }
+                }
+                .overlay(alignment: .bottom) {
+                    if padsViewport && !session.controlsVisible { toolbarMargin(height: bottomBar) }
+                }
                 .ignoresSafeArea(.container, edges: isPhone ? .vertical : [])
         }
         .ignoresSafeArea(.keyboard)
@@ -48,7 +57,7 @@ struct ReaderView: View {
         .accessibilityAction(named: Text("Show or hide reading controls")) { session.toggleControls() }
         .overlay(alignment: .top) { ReaderTopOverlay(session: session) }
         .overlay(alignment: .bottom) {
-            ReaderBottomOverlay(session: session, openContents: { showContents = true },
+            ReaderBottomOverlay(session: session, reservesToolbarSpace: reservesToolbarSpace, openContents: { showContents = true },
                 openPreferences: { showPreferences = true }, openProgressJump: { showProgressJump = true })
         }
         .onPreferenceChange(ReaderBarHeights.self) { heights in
@@ -103,6 +112,18 @@ struct ReaderView: View {
         .errorAlert($session.error)
     }
 
+    // The reserved margins sit outside Readium's view and use the same center tap rule.
+    private func toolbarMargin(height: CGFloat) -> some View {
+        GeometryReader { margin in
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { point in
+                    session.contentTapped(at: point, in: CGRect(origin: .zero, size: margin.size))
+                }
+        }
+        .frame(height: height)
+        .accessibilityHidden(true)
+    }
 }
 
 private struct BookReaderPreferencesView: View {

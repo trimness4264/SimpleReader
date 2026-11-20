@@ -56,14 +56,10 @@ struct ReaderTopOverlay: View {
     @State private var closing = false
 
     var body: some View {
-        ZStack {
-            if session.controlsVisible {
-                topControls
-                    .background { measuredReaderBar(.top) }
-                    .transition(readerControlsTransition(verticalOffset: -8, reduceMotion: reduceMotion))
-            }
-        }
-        .animation(readerControlsAnimation(reduceMotion: reduceMotion), value: session.controlsVisible)
+        topControls
+            .background { measuredReaderBar(.top) }
+            .modifier(ReaderBarVisibility(isVisible: session.controlsVisible, hiddenOffset: reduceMotion ? 0 : -8))
+            .animation(readerControlsAnimation(reduceMotion: reduceMotion), value: session.controlsVisible)
     }
 
     private var topControls: some View {
@@ -111,15 +107,17 @@ private struct ReaderOptionsMenu: View {
 
 struct ReaderBottomOverlay: View {
     let session: ReaderSession
+    let reservesToolbarSpace: Bool
     let openContents: () -> Void
     let openPreferences: () -> Void
     let openProgressJump: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var preferences = ReaderControlPreferences()
 
-    init(session: ReaderSession, openContents: @escaping () -> Void, openPreferences: @escaping () -> Void,
-         openProgressJump: @escaping () -> Void) {
+    init(session: ReaderSession, reservesToolbarSpace: Bool, openContents: @escaping () -> Void,
+         openPreferences: @escaping () -> Void, openProgressJump: @escaping () -> Void) {
         self.session = session
+        self.reservesToolbarSpace = reservesToolbarSpace
         self.openContents = openContents
         self.openPreferences = openPreferences
         self.openProgressJump = openProgressJump
@@ -128,17 +126,10 @@ struct ReaderBottomOverlay: View {
     var body: some View {
         VStack(spacing: 4) {
             ReaderSyncBanner(session: session)
-            Group {
-                if session.controlsVisible {
-                    bottomControls.transition(readerControlsTransition(verticalOffset: 8, reduceMotion: reduceMotion))
-                } else if preferences.showProgress {
-                    ReaderProgressJumpButton(session: session, compact: true, openProgressJump: openProgressJump).transition(.opacity)
-                }
-            }
-            .disabled(!session.ready || session.isNavigating || session.isRestoring)
+            controls.disabled(!session.ready || session.isNavigating || session.isRestoring)
         }
         .background {
-            if session.controlsVisible {
+            if reservesToolbarSpace {
                 measuredReaderBar(.bottom)
             } else if session.syncError != nil {
                 measuredReaderBar(.syncStatus)
@@ -146,6 +137,29 @@ struct ReaderBottomOverlay: View {
         }
         .animation(readerControlsAnimation(reduceMotion: reduceMotion), value: session.controlsVisible)
 
+    }
+
+    @ViewBuilder private var controls: some View {
+        if session.isScrolling {
+            if session.controlsVisible {
+                bottomControls.transition(readerControlsTransition(verticalOffset: 8, reduceMotion: reduceMotion))
+            } else {
+                compactProgress
+            }
+        } else {
+            bottomControls
+                .modifier(ReaderBarVisibility(isVisible: session.controlsVisible, hiddenOffset: reduceMotion ? 0 : 8))
+                .overlay(alignment: .bottom) {
+                    if !session.controlsVisible { compactProgress }
+                }
+        }
+    }
+
+    @ViewBuilder private var compactProgress: some View {
+        if preferences.showProgress {
+            ReaderProgressJumpButton(session: session, compact: true, openProgressJump: openProgressJump)
+                .transition(.opacity)
+        }
     }
 
     private var bottomControls: some View {
@@ -225,6 +239,19 @@ private struct ReaderProgressJumpButton: View {
         .accessibilityLabel("Reading progress")
         .accessibilityValue(session.progressLabel)
         .accessibilityHint("Opens the position jump panel")
+    }
+}
+
+private struct ReaderBarVisibility: ViewModifier {
+    let isVisible: Bool
+    let hiddenOffset: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .offset(y: isVisible ? 0 : hiddenOffset)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
     }
 }
 
