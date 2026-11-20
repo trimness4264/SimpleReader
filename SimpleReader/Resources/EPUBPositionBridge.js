@@ -5,7 +5,7 @@
  */
 (function () {
   'use strict';
-  const PRE = new Set(['pre','code','listing','plaintext','xmp','textarea']);
+  const PRE = new Set(['pre','listing','plaintext','xmp','textarea']);
   const BLOCK = new Set(['body','div','p','h1','h2','h3','h4','h5','h6','ul','ol','li','dl','dt','dd','blockquote','pre','section','article','aside','header','footer','nav','main','figure','figcaption','table','thead','tbody','tfoot','tr','td','th','caption','address','details','summary','form','fieldset','center']);
   const inert = e => e.hasAttribute('cfi-inert') || e.matches('script,style,#readium-virtual-page,[data-simple-reader-inert]');
   const transparent = e => e.hasAttribute('cfi-skip');
@@ -22,17 +22,35 @@
   function textChildren(e) {
     return Array.from(e.childNodes).filter((n,i) => n.nodeType === Node.TEXT_NODE && n.data.length && !(i === 0 && BLOCK.has(e.tagName.toLowerCase()) && !pre(e) && !n.data.trim()));
   }
-  const continuation = (s,i) => i > 0 && /[ \t\n\r\f]/.test(s[i]) && /[ \t\n\r\f]/.test(s[i-1]);
+  const isFoldedWhitespace = (text, index, preserveWhitespace) =>
+    !preserveWhitespace && index > 0 && /[ \t\n\r\f]/.test(text[index]) && /[ \t\n\r\f]/.test(text[index - 1]);
+  const codePointWidth = (text, index) => text.codePointAt(index) > 0xffff ? 2 : 1;
+
+  // DOM Range offsets count UTF-16 units. CREngine counts code points after
+  // folding whitespace, except in preformatted text where every space counts.
   function collapsedOffset(node, offset) {
-    if (pre(node.parentElement)) return offset;
-    let count = 0; for (let i = 0; i < Math.min(offset,node.length); i++) if (!continuation(node.data,i)) count++;
+    const text = node.data;
+    const preserveWhitespace = pre(node.parentElement);
+    const limit = Math.min(offset, text.length);
+    let count = 0;
+    for (let i = 0; i < limit;) {
+      const next = i + codePointWidth(text, i);
+      if (next > limit) break;
+      if (!isFoldedWhitespace(text, i, preserveWhitespace)) count++;
+      i = next;
+    }
     return count;
   }
   function rawOffset(node, offset) {
-    if (pre(node.parentElement)) { if (offset > node.length) throw Error('Text offset exceeds node'); return offset; }
+    const text = node.data;
+    const preserveWhitespace = pre(node.parentElement);
     let count = 0;
-    for (let i = 0; i < node.length; i++) { if (continuation(node.data,i)) continue; if (count === offset) return i; count++; }
-    if (count === offset) return node.length;
+    for (let i = 0; i < text.length; i += codePointWidth(text, i)) {
+      if (isFoldedWhitespace(text, i, preserveWhitespace)) continue;
+      if (count === offset) return i;
+      count++;
+    }
+    if (count === offset) return text.length;
     throw Error('Text offset exceeds node');
   }
   function path(e, spine, single) {
@@ -115,10 +133,13 @@
       const r = document.createRange(); r.selectNodeContents(node);
       if (!Array.from(r.getClientRects()).some(visible)) continue;
       // Binary search is unsafe for paginated ranges. Test each character of the visible text node.
-      for (let offset = 0; offset < node.length; offset++) {
-        r.setStart(node,offset); r.setEnd(node,offset+1);
+      const text = node.data;
+      for (let offset = 0; offset < text.length;) {
+        const end = offset + codePointWidth(text, offset);
+        r.setStart(node, offset); r.setEnd(node, end);
         const v = r.getBoundingClientRect();
         if (visible(v)) return fromPoint(node,offset,spine,single);
+        offset = end;
       }
     }
     // Empty pages and CSS background covers still have a valid chapter anchor.

@@ -6,6 +6,58 @@ import UIKit
 @testable import SimpleReader
 
 @MainActor final class ReadingPositionTests: XCTestCase {
+    func testUnicodeXPointersMatchCREngine() async throws {
+        let file = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "xpointer-unicode", withExtension: "epub", subdirectory: "Fixtures"))
+        let readium = ReadiumService()
+        let publication = try await readium.open(file)
+        let positions = await EPUBReadingPosition(publication: publication, spine: try await readium.spine(file))
+        let navigator = ContinuousEPUBController(publication: publication, initialLocation: nil, settings: ReaderSettings())
+        let window = present(navigator)
+        defer { navigator.close(); window.isHidden = true }
+        let initial = try await positions.initialPosition(in: navigator, updatedAt: Date())
+        _ = try XCTUnwrap(initial)
+
+        // KOReader v2026.07.1, CREngine DOM 20240114. See Scripts/dump_crengine_xpointers.lua.
+        let cases: [(id: String, word: String, path: String, start: Int, end: Int)] = [
+            ("normal", "😀", "p[1]", 3, 4),
+            ("normal", "𠮷", "p[1]", 5, 6),
+            ("normal", "e\u{301}", "p[1]", 7, 9),
+            ("normal", "afterNormal", "p[1]", 10, 21),
+            ("preformatted", "afterPreformatted", "pre", 12, 29),
+            ("inline-code", "afterCode", "p[2]/code", 10, 19),
+        ]
+        let source = try EPUBPositionBridge.source
+        for sample in cases {
+            let path = "/body/DocFragment/body/\(sample.path)/text()"
+            let pointers = ["\(path).\(sample.start)", "\(path).\(sample.end)"]
+            let result = try await navigator.evaluateJavaScript("""
+                \(source)
+                (() => {
+                  const bridge = window.SimpleReaderBridge;
+                  const word = \(try EPUBPositionBridge.quoted(sample.word));
+                  const node = document.getElementById(\(try EPUBPositionBridge.quoted(sample.id))).firstChild;
+                  const start = node.data.indexOf(word);
+                  if (start < 0) throw Error('Missing CREngine sample text: ' + word);
+                  const expected = [start, start + word.length];
+                  const resolved = [\(try EPUBPositionBridge.quoted(pointers[0])), \(try EPUBPositionBridge.quoted(pointers[1]))].map(pointer => {
+                    const anchor = bridge.resolve(pointer);
+                    const resolvedNode = document.querySelector(anchor.cssSelector).childNodes[anchor.textNodeIndex];
+                    return resolvedNode === node ? anchor.textOffset : null;
+                  });
+                  return {
+                    expected,
+                    resolved,
+                    encoded: expected.map(offset => bridge.fromPoint(node, offset, 0, true))
+                  };
+                })();
+                """).get()
+            let values = try XCTUnwrap(result as? [String: Any])
+            let expected = try XCTUnwrap(values["expected"] as? [Int])
+            XCTAssertEqual(values["resolved"] as? [Int], expected, "Resolve \(pointers)")
+            XCTAssertEqual(values["encoded"] as? [String], pointers, "Encode \(sample.word) in \(sample.path)")
+        }
+    }
+
     func testRestoringPointerSurvivesChapterAndFontChanges() async throws {
         let readium = ReadiumService()
         let file = try epubFile()
