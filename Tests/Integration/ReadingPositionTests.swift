@@ -165,7 +165,7 @@ import UIKit
         await session.close()
     }
 
-    func testForegroundCheckWaitsForBackgroundUpload() async throws {
+    func testForegroundKeepsReadingPositionWhileBackgroundUploadFinishes() async throws {
         let store = try library()
         let readium = ReadiumService()
         let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
@@ -184,8 +184,15 @@ import UIKit
         let uploadStarted = expectation(description: "Background upload started")
         let (upload, releaseUpload) = AsyncStream<Void>.makeStream()
         defer { releaseUpload.finish() }
+        // The background check reads the server before and after uploading.
+        let expectedBackgroundReads = 2
         var reads = 0
-        server.onRead = { reads += 1 }
+        server.onRead = { [weak server] in
+            reads += 1
+            if reads > expectedBackgroundReads {
+                server?.remote = RemoteProgress(progress: "5", percentage: 1, timestamp: 201, device_id: "other")
+            }
+        }
         server.onUpload = {
             uploadStarted.fulfill()
             for await _ in upload { break }
@@ -204,10 +211,75 @@ import UIKit
         await foreground.value
         await background.value
 
-        // Background read, upload confirmation, and the deferred foreground check.
-        XCTAssertEqual(reads, 3)
+        XCTAssertEqual(reads, expectedBackgroundReads)
         XCTAssertEqual(session.currentPDFPage, 2)
+        XCTAssertEqual(store.book(book.id)?.position?.pdfPage, 1)
         XCTAssertEqual(store.book(book.id)?.pendingSync, false)
+        await session.close()
+    }
+
+    func testOpeningInBackgroundDoesNotApplyRemotePositionOnForeground() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+        let server = ProgressServer()
+        server.remote = RemoteProgress(progress: "5", percentage: 1, timestamp: 200, device_id: "other")
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+        let window = present(session.container)
+        defer { window.isHidden = true }
+
+        await session.background()
+        await session.load()
+        XCTAssertTrue(session.ready, session.error ?? "Reader not ready")
+        await session.foreground()
+
+        XCTAssertEqual(session.currentPDFPage, 1)
+        XCTAssertNil(store.book(book.id)?.remoteBaseline)
+        await session.synchronize()
+        XCTAssertEqual(session.currentPDFPage, 5)
+        await session.close()
+    }
+
+    func testTransientBackgroundResizeKeepsExactEPUBScrollOffset() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: epubFile())
+        var settings = store.settings
+        settings.reader.layout = .scroll
+        try store.saveSettings(settings)
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let controller = session.container
+        let window = present(controller)
+        defer { window.isHidden = true }
+        await session.load()
+        XCTAssertTrue(session.ready, session.error ?? "Reader not ready")
+        let navigator = try XCTUnwrap(controller.children.first as? ContinuousEPUBController)
+        let originalSize = controller.view.bounds.size
+        let originalInsets = navigator.scrollView.contentInset
+        let scrollOffset: CGFloat = 240
+        navigator.scrollView.setContentOffset(CGPoint(x: 0, y: scrollOffset), animated: false)
+        await session.background()
+
+        // The app switcher can temporarily report a different orientation.
+        controller.view.frame.size = CGSize(width: originalSize.height, height: originalSize.width)
+        session.updateScrollInsets(UIEdgeInsets(top: 24, left: 0, bottom: 40, right: 0))
+        controller.view.layoutIfNeeded()
+        XCTAssertNotEqual(controller.view.bounds.size, originalSize)
+        XCTAssertEqual(navigator.scrollView.bounds.size, originalSize)
+        XCTAssertEqual(navigator.scrollView.contentInset, originalInsets)
+        controller.view.frame.size = originalSize
+        session.updateScrollInsets(nil)
+        controller.view.layoutIfNeeded()
+        XCTAssertFalse(session.isRestoring)
+
+        await session.foreground()
+        XCTAssertEqual(navigator.scrollView.contentOffset.y, scrollOffset, accuracy: 0.5)
+        XCTAssertFalse(session.isRestoring)
         await session.close()
     }
 
@@ -270,7 +342,7 @@ import UIKit
         await session.close()
     }
 
-    func testRespondingToStaleOfferResumesPendingForegroundCheck() async throws {
+    func testRespondingToStaleOfferDoesNotRefreshProgressUntilManualSync() async throws {
         let store = try library()
         let readium = ReadiumService()
         let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
@@ -295,6 +367,9 @@ import UIKit
         await session.respond(to: staleOffer, with: .useServer)
 
         XCTAssertEqual(session.currentPDFPage, 2)
+        XCTAssertNil(session.prompt)
+
+        await session.synchronize()
         let currentOffer = try XCTUnwrap(session.prompt)
         XCTAssertEqual(currentOffer.remote.fingerprint, server.remote?.fingerprint)
 
@@ -305,7 +380,7 @@ import UIKit
         var checked = false
         server.onRead = { checked = true }
         await session.foreground()
-        XCTAssertTrue(checked)
+        XCTAssertFalse(checked)
         await session.close()
     }
 

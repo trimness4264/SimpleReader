@@ -17,12 +17,7 @@ struct SyncPrompt: Identifiable {
     }
 
     enum Request {
-        case opening, foreground, manual, uploadLocal, leaving
-    }
-
-    private struct AutomaticCheck {
-        let id = UUID()
-        let request: Request
+        case opening, manual, uploadLocal, leaving
     }
 
     struct RemoteMoveFailure {
@@ -42,7 +37,7 @@ struct SyncPrompt: Identifiable {
     private let flush: @MainActor () async -> Void
     private let move: @MainActor (RemoteProgress, Bool, @MainActor (RemoteMoveFailure) -> Void) async -> Void
     @ObservationIgnored private var inFlight = false
-    @ObservationIgnored private var pendingCheck: AutomaticCheck?
+    @ObservationIgnored private var isOpeningCheckPending = false
     @ObservationIgnored private var offeredApproximateFingerprint: String?
 
     init(bookID: UUID, coordinator: SyncCoordinator, positions: ReaderPositionSession,
@@ -57,39 +52,35 @@ struct SyncPrompt: Identifiable {
     }
 
     func checkOnOpen() async {
-        if pendingCheck == nil { pendingCheck = AutomaticCheck(request: .opening) }
-        await resumeAutomaticCheck()
+        isOpeningCheckPending = true
+        await resumeOpeningCheck()
     }
 
-    func requestForegroundCheck() {
-        pendingCheck = AutomaticCheck(request: .foreground)
+    func discardOpeningCheck() {
+        isOpeningCheckPending = false
     }
 
-    func discardAutomaticCheck() {
-        pendingCheck = nil
+    func scheduleOpeningCheck() {
+        guard isOpeningCheckPending else { return }
+        Task { [weak self] in await self?.resumeOpeningCheck() }
     }
 
-    func scheduleAutomaticCheck() {
-        guard pendingCheck != nil else { return }
-        Task { [weak self] in await self?.resumeAutomaticCheck() }
-    }
-
-    func resumeAutomaticCheck() async {
-        while !Task.isCancelled, let check = pendingCheck, canStart(check.request) {
-            await run(check.request)
-            if !Task.isCancelled && pendingCheck?.id == check.id { pendingCheck = nil }
+    func resumeOpeningCheck() async {
+        if !Task.isCancelled, isOpeningCheckPending, canStart(.opening) {
+            await run(.opening)
+            if !Task.isCancelled { isOpeningCheckPending = false }
         }
-        if Task.isCancelled { scheduleAutomaticCheck() }
+        if Task.isCancelled { scheduleOpeningCheck() }
     }
 
     func synchronize(_ request: Request) async {
         guard !Task.isCancelled, canStart(request) else { return }
-        let coveredCheck = request == .manual ? pendingCheck : nil
+        let coversOpeningCheck = request == .manual && isOpeningCheckPending
         await run(request)
-        if let coveredCheck, !Task.isCancelled && pendingCheck?.id == coveredCheck.id {
-            pendingCheck = nil
+        if coversOpeningCheck && !Task.isCancelled {
+            isOpeningCheckPending = false
         }
-        await resumeAutomaticCheck()
+        await resumeOpeningCheck()
     }
 
     private func canStart(_ request: Request) -> Bool {
@@ -131,7 +122,7 @@ struct SyncPrompt: Identifiable {
                 }
             }
         } catch is CancellationError {
-            // The caller keeps an automatic check pending if its task was cancelled.
+            // The caller keeps the opening check pending if its task was cancelled.
         } catch {
             if !Task.isCancelled { self.error = String(localized: "Sync failed: \(error.localizedDescription)") }
         }
@@ -148,7 +139,7 @@ struct SyncPrompt: Identifiable {
         case .keepLocal:
             break
         }
-        await resumeAutomaticCheck()
+        await resumeOpeningCheck()
     }
 
     private func receive(_ remote: RemoteProgress, approximate: Bool = false, revision: Int) async {

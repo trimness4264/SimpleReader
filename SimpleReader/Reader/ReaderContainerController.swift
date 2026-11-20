@@ -121,6 +121,7 @@ private final class ReaderContainerView: UIView {
     private var appeared = false
     private var layoutSize: CGSize = .zero
     private var layoutChanged = false
+    private(set) var isLayoutSuspended = false
     private var transitioning = false
     private var activeTurn: PageTurnTransition?
     private var pageTurnSurface: ReadiumPageTurnSurface?
@@ -142,13 +143,18 @@ private final class ReaderContainerView: UIView {
         didSet { updateContentInteraction() }
     }
     private lazy var pageTurnPan = UIPanGestureRecognizer(target: self, action: #selector(handlePageTurn(_:)))
+    private var readerContentView: UIView? {
+        children.first?.view ?? view.subviews.first(where: { $0 is PDFView })
+    }
 
     override func loadView() {
         let surface = ReaderContainerView()
         surface.onSizeWillChange = { [weak self] in
-            self?.layoutChanged = true
-            self?.onLayoutWillChange?()
+            guard let self, !self.isLayoutSuspended else { return }
+            self.layoutChanged = true
+            self.onLayoutWillChange?()
         }
+        surface.autoresizesSubviews = !isLayoutSuspended
         view = surface
         updateContentInteraction()
     }
@@ -254,8 +260,7 @@ private final class ReaderContainerView: UIView {
         guard isCurrent(turn) else { return }
         finishingTurn = turn
         var failure: Error?
-        let content = children.first?.view ?? view.subviews.first(where: { $0 is PDFView })
-        let moved = await turn.animate(in: view, content: content, direction: towardLeft ? 1 : -1,
+        let moved = await turn.animate(in: view, content: readerContentView, direction: towardLeft ? 1 : -1,
             isCurrent: { self.isCurrent(turn) }) {
             do {
                 guard self.isCurrent(turn) else { return false }
@@ -316,7 +321,32 @@ private final class ReaderContainerView: UIView {
         if finishingTurn === turn { finishingTurn = nil }
     }
 
+    func suspendLayout() {
+        isLayoutSuspended = true
+        if isViewLoaded { view.autoresizesSubviews = false }
+    }
+
+    func resumeLayout() {
+        guard isLayoutSuspended else { return }
+        isLayoutSuspended = false
+        guard isViewLoaded else { return }
+        // Apply only the final viewport after any intermediate changes in the app switcher.
+        let bounds = view.bounds
+        if let content = readerContentView, content.bounds.size != bounds.size {
+            onLayoutWillChange?()
+            content.frame = bounds
+            layoutChanged = true
+        }
+        view.autoresizesSubviews = true
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+    }
+
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        guard !isLayoutSuspended else {
+            super.viewWillTransition(to: size, with: coordinator)
+            return
+        }
         transitioning = true
         onLayoutWillChange?()
         super.viewWillTransition(to: size, with: coordinator)
@@ -327,7 +357,7 @@ private final class ReaderContainerView: UIView {
     }
 
     override func viewWillLayoutSubviews() {
-        if layoutSize != view.bounds.size {
+        if !isLayoutSuspended, layoutSize != view.bounds.size {
             layoutSize = view.bounds.size
             layoutChanged = true
         }
@@ -336,6 +366,7 @@ private final class ReaderContainerView: UIView {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        guard !isLayoutSuspended else { return }
         onLayout?(view.bounds.size, traitCollection.userInterfaceIdiom)
         if layoutChanged && !transitioning { onLayoutDidChange?() }
         layoutChanged = false
@@ -364,17 +395,11 @@ private final class ReaderContainerView: UIView {
         }
         addChild(child)
         child.view.frame = view.bounds
+        child.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         // UIKit forwards an in-flight parent appearance transition automatically.
         // Only start a separate transition when the parent has already appeared.
         if appeared { child.beginAppearanceTransition(true, animated: false) }
         view.addSubview(child.view)
-        child.view.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            child.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            child.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            child.view.topAnchor.constraint(equalTo: view.topAnchor),
-            child.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
         child.didMove(toParent: self)
         view.setNeedsLayout(); view.layoutIfNeeded()
         if appeared { child.endAppearanceTransition() }

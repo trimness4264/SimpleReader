@@ -140,9 +140,8 @@ import PDFKit
         let store = try library()
         let readium = ReadiumService()
         let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
-        let server = ProgressServer()
         let session = ReaderSession(bookID: book.id, store: store, readium: readium,
-            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
         let window = present(session.container)
         window.windowScene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         window.makeKeyAndVisible()
@@ -169,23 +168,14 @@ import PDFKit
 
         session.container.beginAppearanceTransition(false, animated: false)
         session.container.endAppearanceTransition()
-        var settings = store.settings
-        settings.sync.enabled = true
-        try store.saveSettings(settings)
-        let synchronized = expectation(description: "Foreground sync ran after position recovery")
-        server.onRead = {
-            XCTAssertFalse(session.isRestoring)
-            XCTAssertEqual(session.currentPDFPage, 1)
-            synchronized.fulfill()
-        }
         await session.foreground()
         XCTAssertTrue(session.isRestoring)
         XCTAssertFalse(session.container.view.isUserInteractionEnabled)
 
+        let restored = expectChange("Visible reader restored the interrupted turn's origin") { _ = session.isRestoring }
         session.container.beginAppearanceTransition(true, animated: false)
         session.container.endAppearanceTransition()
-        await fulfillment(of: [synchronized], timeout: 10)
-        server.onRead = nil
+        await fulfillment(of: [restored], timeout: 10)
 
         XCTAssertEqual(session.currentPDFPage, 1)
         XCTAssertEqual(store.book(book.id)?.position, origin)

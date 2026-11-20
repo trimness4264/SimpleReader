@@ -151,6 +151,13 @@ extension EPUBReadingNavigator {
         if case .paginated(let navigator) = renderer { navigator.submitPreferences(Self.preferences(configuration)) }
     }
 
+    func updateSystemAppearance(isDark: Bool) {
+        guard configuration.settings.theme == .system, configuration.systemIsDark != isDark else { return }
+        configuration.systemIsDark = isDark
+        // Changing colors alone does not require restoring the reading position.
+        if case .paginated(let navigator) = renderer { navigator.submitPreferences(Self.preferences(configuration)) }
+    }
+
     func updateScrollInsets(_ insets: UIEdgeInsets?) {
         configuration.scrollInsets = insets
         if case .continuous(let navigator) = renderer { navigator.updateScrollInsets(insets ?? .zero) }

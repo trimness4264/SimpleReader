@@ -70,12 +70,12 @@ import ReadiumShared
             self.isRestoring = activity == .restoring
             self.isNavigating = activity == .navigating
             self.container.allowsContentInteraction = !self.closed && activity != .navigating && activity != .restoring
-            if activity == .idle { self.progressSync.scheduleAutomaticCheck() }
+            if activity == .idle { self.progressSync.scheduleOpeningCheck() }
         }
         renderer.onEvent = { [weak self] in self?.rendererDidEmit($0) }
         container.onLayoutWillChange = { [weak self] in self?.recovery.protect() }
         container.onLayoutDidChange = { [weak self] in self?.recovery.schedule() }
-        container.onPageTurnEnded = { [weak self] in self?.progressSync.scheduleAutomaticCheck() }
+        container.onPageTurnEnded = { [weak self] in self?.progressSync.scheduleOpeningCheck() }
         container.onVisibilityChanged = { [weak self] visible in
             guard let self else { return }
             self.isReaderVisible = visible
@@ -87,8 +87,8 @@ import ReadiumShared
             }
         }
         container.onAppearanceChange = { [weak self] in
-            guard let self = self, self.store.settings.reader.theme == .system else { return }
-            self.updatePreferences()
+            guard let self, self.isActive else { return }
+            self.renderer.updateSystemAppearance()
         }
         container.pageTurnDelegate = self
 
@@ -147,7 +147,7 @@ import ReadiumShared
             try await initialCheckpoint()
             guard !closed else { return }
             ready = true
-            await progressSync.checkOnOpen()
+            if isActive { await progressSync.checkOnOpen() }
         } catch is CancellationError {
         } catch {
             guard !closed, !Task.isCancelled else { return }
@@ -299,14 +299,14 @@ import ReadiumShared
         }
     }
     func close() async {
-        progressSync.discardAutomaticCheck()
+        progressSync.discardOpeningCheck()
         let interruptedTurn = navigation.abandonPageTurnForClose()
         container.cancelPageTransition()
         positions.movementBegan()
         // The viewport can still show an unconfirmed turn. Its origin was saved at the start.
         if !interruptedTurn { await flush() }
         closed = true
-        progressSync.discardAutomaticCheck()
+        progressSync.discardOpeningCheck()
         renderer.close()
         positions.invalidate()
         await progressSync.synchronize(.leaving)
@@ -314,23 +314,27 @@ import ReadiumShared
     func resignActive() {
         guard !closed else { return }
         isActive = false
+        container.suspendLayout()
+        progressSync.discardOpeningCheck()
         recovery.suspend()
     }
     func background() async {
         guard !closed else { return }
         resignActive()
-        progressSync.requestForegroundCheck()
         await flush()
         await progressSync.synchronize(.leaving)
     }
     func foreground() async {
         guard !closed else { return }
         isActive = true
+        container.resumeLayout()
+        renderer.applyScrollInsets()
+        renderer.updateSystemAppearance()
         await resumeWhenVisible()
     }
     private func resumeWhenVisible() async {
         await recovery.schedule()?.value
-        await progressSync.resumeAutomaticCheck()
+        await progressSync.resumeOpeningCheck()
     }
     func retryRecovery() async {
         guard !closed else { return }

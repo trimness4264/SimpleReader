@@ -103,6 +103,10 @@ struct ContentsItem: Identifiable {
         if updated !== epub { install(updated) }
     }
 
+    func updateSystemAppearance() {
+        epub?.updateSystemAppearance(isDark: container.traitCollection.userInterfaceStyle == .dark)
+    }
+
     func rebuildEPUB(at locator: Locator?) throws {
         guard !closed, let epub else { return }
         install(try epub.replacing(epubConfiguration, at: locator))
@@ -111,8 +115,12 @@ struct ContentsItem: Identifiable {
     func updateScrollInsets(_ insets: UIEdgeInsets?) {
         guard !closed, scrollInsets != insets else { return }
         scrollInsets = insets
-        epub?.updateScrollInsets(insets)
-        pdf?.updateScrollInsets(insets)
+        if !container.isLayoutSuspended { applyScrollInsets() }
+    }
+
+    func applyScrollInsets() {
+        epub?.updateScrollInsets(scrollInsets)
+        pdf?.updateScrollInsets(scrollInsets)
     }
 
     func close() {
