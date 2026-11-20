@@ -6,18 +6,7 @@ import ReadiumNavigator
 @MainActor protocol EPUBReadingNavigator: AnyObject {
     var publication: Publication { get }
     var currentLocation: Locator? { get }
-    func evaluateJavaScript(_ script: String) async -> Result<Any, Error>
-    func locator(for anchor: EPUBTextAnchor, in link: Link) throws -> Locator
-    func go(to locator: Locator, options: NavigatorGoOptions) async -> Bool
-    func go(to link: Link, options: NavigatorGoOptions) async -> Bool
-}
-
-extension EPUBNavigatorViewController: EPUBReadingNavigator {}
-
-extension EPUBReadingNavigator {
-    func locator(for anchor: EPUBTextAnchor, in link: Link) throws -> Locator { try anchor.locator(in: link) }
-    func go(to locator: Locator) async -> Bool { await go(to: locator, options: .init(animated: false)) }
-    func go(to link: Link) async -> Bool { await go(to: link, options: .init(animated: false)) }
+    func evaluatePositionJavaScript(_ script: String, in href: String) async throws -> Any
 }
 
 /// One rendering lifetime. Replacing a mode creates a new reader and invalidates the old instance.
@@ -65,7 +54,7 @@ extension EPUBReadingNavigator {
     private let publication: Publication
     private let positions: EPUBReadingPosition
     private let renderer: Renderer
-    private let paginatedPosition: PaginatedEPUBPosition?
+    private let paginatedPosition: PaginatedEPUBNavigation?
     private var configuration: Configuration
     private var closed = false
 
@@ -108,7 +97,7 @@ extension EPUBReadingNavigator {
             let navigator = try EPUBNavigatorViewController(publication: publication, initialLocation: locator,
                 config: .init(preferences: Self.preferences(configuration), fontFamilyDeclarations: try ReaderFonts.declarations()))
             renderer = .paginated(navigator)
-            paginatedPosition = PaginatedEPUBPosition(navigator: navigator, positions: positions, initialLocator: locator)
+            paginatedPosition = PaginatedEPUBNavigation(navigator: navigator, positions: positions, initialLocator: locator)
         }
         super.init()
         switch renderer {
@@ -190,19 +179,36 @@ extension EPUBReadingNavigator {
             try check(isCurrent)
             return snapshot(of: page, updatedAt: updatedAt)
         }
-        let navigator = renderer.navigator
-        if let json = saved?.locatorJSON, let locator = try Locator(jsonString: json), let pointer = saved?.xpointer {
+        if case .continuous(let navigator) = renderer, let pointer = saved?.xpointer {
+            let locator = try saved?.locatorJSON.flatMap { try Locator(jsonString: $0) }
             do {
-                try await positions.restore(locator, pointer: pointer, in: navigator) { !self.closed && isCurrent() }
+                try await restoreContinuous(locator, pointer: pointer, in: navigator, isCurrent: isCurrent)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                try await positions.restore(locator, pointer: nil, in: navigator) { !self.closed && isCurrent() }
+                // Some saved XPointer-only positions no longer resolve. Reopen at the chapter start.
+                let fallback = try locator ?? EPUBReadingPosition.chapterStart(publication.readingOrder.first)
+                try await navigator.move(to: fallback) { !self.closed && isCurrent() }
             }
         }
-        let position = try await positions.initialPosition(in: navigator, updatedAt: updatedAt) { !self.closed && isCurrent() }
-        try check(isCurrent)
-        return position.map { Snapshot(position: $0, locator: currentLocation) }
+        // A cold WebKit chapter can take longer than a normal navigation.
+        for _ in 0..<100 {
+            try check(isCurrent)
+            if let locator = currentLocation {
+                do {
+                    let pointer = try await positions.capture(locator, in: renderer.navigator)
+                    try check(isCurrent)
+                    return Snapshot(position: ReadingPosition(progression: locator.locations.totalProgression ?? 0,
+                        locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: updatedAt), locator: locator)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Retry capture until the initial document and its layout are ready.
+                }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return nil
     }
 
     func capture(_ request: Capture, fallbackProgression: Double, isCurrent: @escaping @MainActor () -> Bool = { true }) async throws -> Snapshot? {
@@ -252,37 +258,46 @@ extension EPUBReadingNavigator {
     @discardableResult
     func move(to target: Target, isCurrent: @escaping @MainActor () -> Bool) async throws -> Snapshot? {
         try check(isCurrent)
-        if let paginatedPosition {
-            let locator: Locator?
-            let pointer: String?
-            switch target {
-            case .progression(let value):
-                locator = await publication.locate(progression: value)
-                pointer = nil
-            case .link(let link):
+        let locator: Locator?
+        let pointer: String?
+        switch target {
+        case .progression(let value):
+            guard let position = await publication.locate(progression: value) else { throw AppFailure("Couldn’t locate the position by percentage.") }
+            locator = position
+            pointer = nil
+        case .link(let link):
+            if paginatedPosition != nil {
                 locator = await publication.locate(link)
-                pointer = nil
-            case .checkpoint(let location, let anchor):
-                locator = location
-                pointer = anchor
+            } else {
+                locator = try EPUBReadingPosition.locator(for: link)
             }
-            try check(isCurrent)
-            guard locator != nil || pointer != nil else { throw AppFailure("Couldn’t jump to the selected position.") }
+            pointer = nil
+        case .checkpoint(let location, let anchor):
+            locator = location
+            pointer = anchor
+        }
+        try check(isCurrent)
+        guard locator != nil || pointer != nil else { throw AppFailure("Couldn’t jump to the selected position.") }
+        if let paginatedPosition {
             let page = try await paginatedPosition.move(to: locator, pointer: pointer) { !self.closed && isCurrent() }
             try check(isCurrent)
             return snapshot(of: page)
         }
-        let navigator = renderer.navigator
-        switch target {
-        case .progression(let value):
-            _ = try await positions.go(toProgression: value, in: navigator) { !self.closed && isCurrent() }
-        case .link(let link):
-            try await positions.go(to: link, in: navigator) { !self.closed && isCurrent() }
-        case .checkpoint(let locator, let pointer):
-            try await positions.restore(locator, pointer: pointer, in: navigator) { !self.closed && isCurrent() }
-        }
+        guard case .continuous(let navigator) = renderer else { return nil }
+        try await restoreContinuous(locator, pointer: pointer, in: navigator, isCurrent: isCurrent)
         try check(isCurrent)
         return nil
+    }
+
+    private func restoreContinuous(_ locator: Locator?, pointer: String?, in navigator: ContinuousEPUBController,
+                                   isCurrent: @MainActor () -> Bool) async throws {
+        if let pointer {
+            try await navigator.move(to: positions.target(for: pointer)) { !self.closed && isCurrent() }
+        } else if let locator {
+            try await navigator.move(to: locator) { !self.closed && isCurrent() }
+        } else {
+            throw AppFailure("Couldn’t read the last reading position.")
+        }
     }
 
     func remoteSnapshot(_ remote: RemoteProgress, approximate: Bool, isCurrent: @escaping @MainActor () -> Bool) async throws -> Snapshot {
@@ -302,13 +317,13 @@ extension EPUBReadingNavigator {
             locatorJSON: visible.jsonString, xpointer: approximate ? nil : remote.progress, updatedAt: Date()), locator: visible)
     }
 
-    private func snapshot(of page: PaginatedEPUBPosition.Page, updatedAt: Date = Date()) -> Snapshot {
+    private func snapshot(of page: PaginatedEPUBNavigation.Page, updatedAt: Date = Date()) -> Snapshot {
         Snapshot(position: ReadingPosition(progression: page.locator.locations.totalProgression ?? 0,
             locatorJSON: page.locator.jsonString, xpointer: page.pointer, updatedAt: updatedAt), locator: page.locator)
     }
 
     func contentsID() async -> UUID? {
-        await positions.contentsID(in: renderer.navigator, contents: contents)
+        await positions.contentsID(at: currentLocation, in: renderer.navigator, contents: contents)
     }
 
     func canBeginPageTurn(isGesture: Bool) -> Bool {

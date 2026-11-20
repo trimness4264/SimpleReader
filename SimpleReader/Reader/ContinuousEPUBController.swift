@@ -1,6 +1,5 @@
 import UIKit
 import ReadiumShared
-import ReadiumNavigator
 
 /// Each chapter keeps its original document. Only the outer scroll view scrolls.
 @MainActor final class ContinuousEPUBController: UIViewController, EPUBReadingNavigator, UIScrollViewDelegate {
@@ -77,8 +76,13 @@ import ReadiumNavigator
             started = true
             startupTask = Task { [weak self] in
                 guard let self = self, let first = self.publication.readingOrder.first else { return }
-                if let initial = self.initialLocation { _ = await self.go(to: initial) }
-                else { _ = await self.go(to: first) }
+                do {
+                    let locator = try self.initialLocation ?? EPUBReadingPosition.locator(for: first)
+                    _ = try await self.navigate(to: locator, path: nil, isCurrent: { true })
+                } catch is CancellationError {
+                } catch {
+                    self.onError?(error)
+                }
             }
         }
     }
@@ -149,11 +153,11 @@ import ReadiumNavigator
         chapterViews.removeValue(forKey: index)?.close()
     }
 
-    private func retainChapters(target: Int? = nil) {
+    private func retainChapters() {
         guard !closed, !layout.chapters.isEmpty else { return }
         let viewport = viewport
-        let index = target ?? layout.visibleChapter(in: viewport)
-        let range = layout.retainedChapters(in: viewport, target: target)
+        let index = layout.visibleChapter(in: viewport)
+        let range = layout.retainedChapters(in: viewport)
         for i in Array(chapterViews.keys) where !range.contains(i) { removeChapter(i) }
         startChapter(index)
         for i in range where i != index { startChapter(i) }
@@ -240,73 +244,86 @@ import ReadiumNavigator
             chapterViews[index] === chapter && chapter.isCurrent(document)
     }
 
-    func evaluateJavaScript(_ script: String) async -> Result<Any, Error> {
-        do {
-            let index = currentLocation.flatMap { location in
-                publication.readingOrder.firstIndex { EPUBPositionBridge.normalize($0.href) == EPUBPositionBridge.normalize(location.href.string) }
-            } ?? layout.visibleChapter(in: viewport)
-            let revision = navigationRevision
-            let (chapter, document) = try await waitForChapter(index, revision: revision)
-            let range = layout.readableRange(in: index, viewport: viewport)
-            let prefix = "window.SimpleReaderViewport={top:\(range.lowerBound)-window.scrollY,bottom:\(range.upperBound)-window.scrollY};\n"
-            let result = try await chapter.evaluateJavaScript(prefix + script, in: document)
-            guard isCurrent(chapter, document, at: index, revision: revision) else { throw CancellationError() }
-            return .success(result)
-        } catch { return .failure(error) }
+    func evaluatePositionJavaScript(_ script: String, in href: String) async throws -> Any {
+        guard let index = chapterIndex(for: href), chapterIndex(for: currentLocation?.href.string) == index else { throw CancellationError() }
+        let revision = navigationRevision
+        let (chapter, document) = try await waitForChapter(index, revision: revision)
+        let range = layout.readableRange(in: index, viewport: viewport)
+        let prefix = "window.SimpleReaderViewport={top:\(range.lowerBound)-window.scrollY,bottom:\(range.upperBound)-window.scrollY};\n"
+        let result = try await chapter.evaluateJavaScript(prefix + script, in: document)
+        guard isCurrent(chapter, document, at: index, revision: revision),
+              chapterIndex(for: currentLocation?.href.string) == index else { throw CancellationError() }
+        return result
     }
 
-    func locator(for anchor: EPUBTextAnchor, in link: Link) throws -> Locator {
-        var locations: [String: Any] = [:]
-        locations["continuousTextNodeIndex"] = anchor.textNodeIndex
-        locations["continuousTextOffset"] = anchor.textOffset
-        return try anchor.locator(in: link, additionalLocations: locations)
+    private func chapterIndex(for href: String?) -> Int? {
+        guard let href else { return nil }
+        let resource = EPUBPositionBridge.normalize(href)
+        return publication.readingOrder.firstIndex { EPUBPositionBridge.normalize($0.href) == resource }
     }
 
-    func go(to link: Link, options: NavigatorGoOptions) async -> Bool {
-        let fragments = link.href.components(separatedBy: "#")
-        var locations = Locator.Locations()
-        if fragments.count > 1 { locations.fragments = [fragments.dropFirst().joined(separator: "#")] }
-        guard let href = AnyURL(string: link.href) else { return false }
-        return await go(to: Locator(href: href, mediaType: link.mediaType ?? .xhtml, locations: locations), options: options)
+    @discardableResult
+    func move(to anchor: EPUBReadingPosition.Target, isCurrent: @MainActor () -> Bool) async throws -> Locator {
+        try await move(to: EPUBReadingPosition.chapterStart(anchor.resource), path: anchor.path, isCurrent: isCurrent)
     }
 
-    func go(to locator: Locator, options: NavigatorGoOptions) async -> Bool {
-        guard !closed, !Task.isCancelled, let index = publication.readingOrder.firstIndex(where: {
-            EPUBPositionBridge.normalize($0.href) == EPUBPositionBridge.normalize(locator.href.string)
-        }) else { return false }
+    @discardableResult
+    func move(to locator: Locator, isCurrent: @MainActor () -> Bool) async throws -> Locator {
+        try await move(to: locator, path: nil, isCurrent: isCurrent)
+    }
+
+    private func move(to locator: Locator, path: String?, isCurrent: @MainActor () -> Bool) async throws -> Locator {
+        try check(isCurrent)
+        startupTask?.cancel()
+        return try await navigate(to: locator, path: path, isCurrent: isCurrent)
+    }
+
+    private func navigate(to locator: Locator, path: String?, isCurrent: @MainActor () -> Bool) async throws -> Locator {
+        try check(isCurrent)
+        guard let index = chapterIndex(for: locator.href.string) else { throw AppFailure("Couldn’t open the chapter.") }
         cancelNavigation()
         let revision = navigationRevision
         navigating = true
-        defer { if revision == navigationRevision { navigating = false } }
-        do {
-            if chapterViews[index]?.needsReload == true { removeChapter(index) }
-            retainChapters(target: index)
-            let (chapter, document) = try await waitForChapter(index, revision: revision)
-            let locations = locator.locations.otherLocations
-            let fragment = locator.locations.fragments.first ?? locator.href.string.components(separatedBy: "#").dropFirst().joined(separator: "#")
-            var target: [String: Any] = ["selector": locations["cssSelector"] ?? "", "fragment": fragment,
-                "highlight": locator.text.highlight ?? "", "progression": locator.locations.progression ?? 0]
-            target["textNodeIndex"] = locations["continuousTextNodeIndex"]
-            target["textOffset"] = locations["continuousTextOffset"]
-            let json = String(decoding: try JSONSerialization.data(withJSONObject: target), as: UTF8.self)
-            let result = try await chapter.evaluateJavaScript("window.SimpleReaderContinuousOffset(\(json))", in: document)
-            guard isCurrent(chapter, document, at: index, revision: revision) else { return false }
-            let localY = result as? Double ?? 0
-            applyScrollPosition(layout.align(chapter: index, at: CGFloat(localY), in: viewport))
-            let progression = layout.progression(in: index, viewport: viewport)
-            let total = (Double(index) + progression) / Double(layout.chapters.count)
-            let location = locator.copy(locations: {
-                $0.progression = progression
-                $0.totalProgression = total
-            })
-            currentLocation = location
-            onLocationChanged?(location)
-            return true
-        } catch is CancellationError { return false }
-        catch {
-            if !closed, revision == navigationRevision, !Task.isCancelled { onError?(error) }
-            return false
+        defer {
+            if revision == navigationRevision {
+                navigating = false
+                retainChapters()
+            }
         }
+        if chapterViews[index]?.needsReload == true { removeChapter(index) }
+        let (chapter, document) = try await waitForChapter(index, revision: revision)
+        try check(isCurrent)
+        let script: String
+        if let path {
+            script = "SimpleReaderBridge.resolve(\(try EPUBPositionBridge.quoted(path)));"
+        } else {
+            script = try EPUBReadingPosition.continuousOffsetScript(for: locator)
+        }
+        let value = try await chapter.evaluateJavaScript(script, in: document)
+        try check(isCurrent)
+        guard self.isCurrent(chapter, document, at: index, revision: revision) else { throw CancellationError() }
+        let destination: (locator: Locator, offset: Double)
+        if path != nil {
+            destination = try EPUBReadingPosition.continuousDestination(value, from: locator)
+        } else {
+            guard let offset = value as? Double, offset.isFinite else { throw AppFailure("Couldn’t jump to the selected position.") }
+            destination = (locator, offset)
+        }
+        applyScrollPosition(layout.align(chapter: index, at: CGFloat(destination.offset), in: viewport))
+        let progression = layout.progression(in: index, viewport: viewport)
+        let total = (Double(index) + progression) / Double(layout.chapters.count)
+        let location = destination.locator.copy(locations: {
+            $0.progression = progression
+            $0.totalProgression = total
+        })
+        currentLocation = location
+        onLocationChanged?(location)
+        return location
+    }
+
+    private func check(_ isCurrent: @MainActor () -> Bool) throws {
+        try Task.checkCancellation()
+        guard !closed, isCurrent() else { throw CancellationError() }
     }
 
     private func linkActivated(_ url: URL) {

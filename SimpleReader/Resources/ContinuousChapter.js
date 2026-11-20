@@ -56,11 +56,8 @@
     }
     if (element) {
       const node = element.childNodes[location.textNodeIndex];
-      if (node?.nodeType === Node.TEXT_NODE && Number.isFinite(location.textOffset)) {
-        const range = document.createRange();
-        const offset = Math.min(node.length, location.textOffset);
-        range.setStart(node, offset);
-        range.setEnd(node, Math.min(node.length, offset + 1));
+      if (node?.nodeType === Node.TEXT_NODE && Number.isInteger(location.textOffset) && location.textOffset >= 0) {
+        const range = SimpleReaderBridge.textRange(node, Math.min(node.length, location.textOffset));
         return window.scrollY + range.getBoundingClientRect().top;
       }
       if (location.highlight) {

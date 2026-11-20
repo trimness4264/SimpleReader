@@ -1,6 +1,4 @@
 import Foundation
-import ReadiumShared
-import ReadiumNavigator
 import WebKit
 
 @MainActor enum EPUBPositionBridge {
@@ -82,57 +80,5 @@ import WebKit
         let data = try JSONSerialization.data(withJSONObject: [text])
         let array = String(decoding: data, as: UTF8.self)
         return String(array.dropFirst().dropLast())
-    }
-    static func spineIndex(_ pointer: String) throws -> Int {
-        let regex = try NSRegularExpression(pattern: "^/body/DocFragment(?:\\[(\\d+)\\])?/body(?:/|$)")
-        let range = NSRange(pointer.startIndex..., in: pointer)
-        guard let match = regex.firstMatch(in: pointer, range: range) else { throw AppFailure("Unsupported KOReader position format.") }
-        if let value = Range(match.range(at: 1), in: pointer), let n = Int(pointer[value]), n > 0 { return n - 1 }
-        if match.range(at: 1).location == NSNotFound { return 0 }
-        throw AppFailure("Invalid chapter number.")
-    }
-    static func capture(navigator: EPUBReadingNavigator, locator: Locator, spine: [String]? = nil) async throws -> String {
-        let href = normalize(locator.href.string)
-        let hrefs = spine ?? navigator.publication.readingOrder.map(\.href)
-        guard let index = hrefs.firstIndex(where: { normalize($0) == href }) else { throw AppFailure("The current chapter is missing from the EPUB reading order.") }
-        let value = try await navigator.evaluateJavaScript("\(try source)\nwindow.SimpleReaderBridge.capture(\(index), \(hrefs.count == 1 ? "true" : "false"));").get()
-        guard let pointer = value as? String else { throw AppFailure("Couldn’t get the EPUB reading position.") }
-        return pointer
-    }
-
-    static func link(for pointer: String, in publication: Publication, spine: [String]) throws -> Link {
-        let index = try spineIndex(pointer)
-        guard spine.indices.contains(index) else { throw AppFailure("The remote chapter is missing from this book. Check that both devices have the same edition.") }
-        guard let link = publication.readingOrder.first(where: { normalize($0.href) == normalize(spine[index]) }) else {
-            throw AppFailure("The remote position refers to a non-linear or unsupported chapter.")
-        }
-        return link
-    }
-
-    static func locator(pointer: String, navigator: EPUBReadingNavigator, spine: [String]? = nil, isCurrent: @MainActor () -> Bool) async throws -> Locator {
-        try Task.checkCancellation()
-        guard isCurrent() else { throw CancellationError() }
-        let hrefs = spine ?? navigator.publication.readingOrder.map(\.href)
-        let link = try link(for: pointer, in: navigator.publication, spine: hrefs)
-        guard await navigator.go(to: link) else { throw AppFailure("Couldn’t open the remote chapter.") }
-        var lastError: Error = AppFailure("The EPUB chapter hasn’t loaded yet.")
-        for _ in 0..<20 {
-            try Task.checkCancellation()
-            guard isCurrent() else { throw CancellationError() }
-            do {
-                guard navigator.currentLocation?.href.string.components(separatedBy: "#")[0] == link.href.components(separatedBy: "#")[0] else { throw AppFailure("Switching chapters…") }
-                let value = try await navigator.evaluateJavaScript("\(try source)\nwindow.SimpleReaderBridge.resolve(\(try quoted(pointer)));").get()
-                try Task.checkCancellation()
-                guard isCurrent() else { throw CancellationError() }
-                guard let result = value as? [String: Any] else { throw AppFailure("Couldn’t resolve the remote reading position.") }
-                return try navigator.locator(for: EPUBTextAnchor(result: result), in: link)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                lastError = error
-                try await Task.sleep(nanoseconds: 100_000_000)
-            }
-        }
-        throw lastError
     }
 }

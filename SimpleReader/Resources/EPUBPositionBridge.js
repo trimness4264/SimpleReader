@@ -53,7 +53,7 @@
     if (count === offset) return text.length;
     throw Error('Text offset exceeds node');
   }
-  function path(e, spine, single) {
+  function path(e) {
     const parts = [];
     while (e && e !== document.body) {
       if (inert(e)) throw Error('Position is in an injected node');
@@ -65,13 +65,13 @@
       e = p;
     }
     if (e !== document.body) throw Error('Position outside body');
-    return '/body/DocFragment' + (single ? '' : '[' + (spine+1) + ']') + '/body' + (parts.length ? '/' + parts.join('/') : '');
+    return parts.length ? '/' + parts.join('/') : '';
   }
-  function fromPoint(node, offset, spine, single) {
-    if (node.nodeType !== Node.TEXT_NODE) return path(node,spine,single);
+  function fromPoint(node, offset) {
+    if (node.nodeType !== Node.TEXT_NODE) return path(node);
     const e = node.parentElement;
     const siblings = textChildren(e), index = siblings.indexOf(node);
-    const base = path(e,spine,single);
+    const base = path(e);
     if (index < 0) return base;
     return base + '/text()' + (siblings.length > 1 ? '[' + (index+1) + ']' : '') + '.' + collapsedOffset(node,offset);
   }
@@ -79,43 +79,73 @@
     const parts = [];
     while (e && e !== document.body) {
       const index = Array.from(e.parentElement.children).indexOf(e)+1;
-      parts.unshift(e.tagName.toLowerCase()+':nth-child('+index+')'); e = e.parentElement;
+      parts.unshift(':nth-child('+index+')'); e = e.parentElement;
     }
     return 'body' + (parts.length ? ' > '+parts.join(' > ') : '');
   }
-  function resolve(pointer) {
-    const m = pointer.match(/^\/body\/DocFragment(?:\[(\d+)\])?\/body(.*)$/);
-    if (!m) throw Error('Unsupported XPointer');
-    const spine = m[1] ? Number(m[1])-1 : 0;
-    let tail = m[2], node = null, raw = 0;
+  function resolvePoint(tail) {
+    let node = null, offset = 0;
     const text = tail.match(/\/text\(\)(?:\[(\d+)\])?\.(\d+)$/);
     const elementOffset = !text && tail.match(/\.(\d+)$/);
     if (text) tail = tail.slice(0, text.index);
     else if (elementOffset) tail = tail.slice(0, elementOffset.index);
+    if (tail && !tail.startsWith('/')) throw Error('Invalid path');
     let e = document.body;
-    for (const segment of tail.split('/').filter(Boolean)) {
-      const s = segment.match(/^(\w+)(?:\[(\d+)\])?$/); if (!s) throw Error('Invalid path segment');
+    for (const segment of tail ? tail.slice(1).split('/') : []) {
+      const s = segment.match(/^([\w:-]+)(?:\[(\d+)\])?$/); if (!s) throw Error('Invalid path segment');
       const list = children(e).filter(c => c.tagName.toLowerCase() === s[1].toLowerCase());
       e = list[s[2] ? Number(s[2])-1 : 0]; if (!e) throw Error('XPointer node not found');
     }
     if (text) {
       node = textChildren(e)[text[1] ? Number(text[1])-1 : 0];
-      if (!node) throw Error('Text node not found'); raw = rawOffset(node,Number(text[2]));
+      if (!node) throw Error('Text node not found'); offset = rawOffset(node,Number(text[2]));
     } else if (elementOffset) {
-      const walker = document.createTreeWalker(e,NodeFilter.SHOW_TEXT); let remaining = Number(elementOffset[1]);
-      while ((node = walker.nextNode())) { const length = collapsedOffset(node,node.length); if (remaining <= length) { raw = rawOffset(node,remaining); break; } remaining -= length; }
+      const walker = document.createTreeWalker(e, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+        acceptNode: n => n.nodeType === Node.ELEMENT_NODE
+          ? (inert(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP)
+          : (textChildren(n.parentElement).includes(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP)
+      });
+      let remaining = Number(elementOffset[1]);
+      while ((node = walker.nextNode())) {
+        const length = collapsedOffset(node, node.length);
+        if (remaining <= length) { offset = rawOffset(node, remaining); break; }
+        remaining -= length;
+      }
       // CREngine can express an element start as img.0/body.0 without text.
       if (!node && Number(elementOffset[1]) !== 0) throw Error('Text offset not found');
     }
-    const quote = node ? node.data.slice(raw,raw+64) : '';
-    return {spine, textNodeIndex:node ? Array.from(node.parentElement.childNodes).indexOf(node) : null, textOffset:raw, cssSelector:selector(node ? node.parentElement : e), highlight:quote, before:node ? node.data.slice(Math.max(0,raw-32),raw) : '', after:node ? node.data.slice(raw+64,raw+96) : ''};
+    return {element: e, node, offset};
+  }
+
+  function resolve(path) {
+    const {element, node, offset} = resolvePoint(path);
+    if (!node) return {
+      kind: 'element', cssSelector: selector(element), verticalOffset: window.scrollY + element.getBoundingClientRect().top
+    };
+    return {
+      kind: 'text', cssSelector: selector(node.parentElement),
+      textNodeIndex: Array.from(node.parentElement.childNodes).indexOf(node), textOffset: offset,
+      verticalOffset: window.scrollY + textRange(node, offset).getBoundingClientRect().top,
+      highlight: node.data.slice(offset, offset + 64), before: node.data.slice(Math.max(0, offset - 32), offset),
+      after: node.data.slice(offset + 64, offset + 96)
+    };
+  }
+
+  function textRange(node, offset) {
+    const range = document.createRange();
+    // At the end of a node, keep the preceding glyph as the layout reference.
+    const start = offset === node.length && offset > 0
+      ? offset - (/^[\uDC00-\uDFFF]$/.test(node.data[offset - 1]) && offset > 1 ? 2 : 1) : offset;
+    range.setStart(node, start);
+    range.setEnd(node, Math.min(node.length, start + codePointWidth(node.data, start)));
+    return range;
   }
   function intersectsViewport(rect, viewport = {top: 0, bottom: innerHeight}) {
     return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < innerWidth &&
       rect.bottom > viewport.top && rect.top < viewport.bottom;
   }
 
-  function capture(spine, single) {
+  function visiblePoint() {
     if (!document.body || document.readyState === 'loading') throw Error('Chapter is still loading');
     const viewport = window.SimpleReaderViewport;
     const visible = rect => intersectsViewport(rect, viewport);
@@ -134,7 +164,7 @@
     });
     let node;
     while ((node = walker.nextNode())) {
-      if (node.nodeType === Node.ELEMENT_NODE) return fromPoint(node,0,spine,single);
+      if (node.nodeType === Node.ELEMENT_NODE) return {node, offset: 0};
       const r = document.createRange(); r.selectNodeContents(node);
       if (!Array.from(r.getClientRects()).some(visible)) continue;
       // Binary search is unsafe for paginated ranges. Test each character of the visible text node.
@@ -143,15 +173,34 @@
         const end = offset + codePointWidth(text, offset);
         r.setStart(node, offset); r.setEnd(node, end);
         const v = r.getBoundingClientRect();
-        if (visible(v)) return fromPoint(node,offset,spine,single);
+        if (visible(v)) return {node, offset};
         offset = end;
       }
     }
     // Empty pages and CSS background covers still have a valid chapter anchor.
-    return path(document.body,spine,single);
+    return {node: document.body, offset: 0};
   }
 
-  function presentation(href, target, spineIndices, single) {
+  function capture() {
+    const {node, offset} = visiblePoint();
+    return fromPoint(node, offset);
+  }
+
+  function contentsIndex(fragments) {
+    const {node} = visiblePoint();
+    let current = -1;
+    fragments.forEach((fragment, index) => {
+      if (!fragment) { current = index; return; }
+      let id = fragment;
+      try { id = decodeURIComponent(fragment); } catch (_) {}
+      const target = document.getElementById(id);
+      if (target && (target.contains(node) ||
+          (target.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING))) current = index;
+    });
+    return current;
+  }
+
+  function presentation(href, target) {
     const root = document.scrollingElement;
     const width = window.innerWidth, height = window.innerHeight;
     const resource = window.readium?.link?.href;
@@ -162,20 +211,11 @@
       ((!rect.width || !rect.height) && rect.left >= 0 && rect.left < width && rect.top >= 0 && rect.top < height);
     const offset = Math.abs(window.scrollX);
     const fixed = !!window.readium.isFixedLayout;
-    if (target?.pointer) {
-      let anchor;
-      try { anchor = resolve(target.pointer); } catch (_) { return { href: resource, missingAnchor: true }; }
-      const element = document.querySelector(anchor.cssSelector);
-      const node = element?.childNodes[anchor.textNodeIndex];
-      if (!element) return { href: resource, missingAnchor: true };
-      let rects = element.getClientRects();
-      if (node?.nodeType === Node.TEXT_NODE && node.length) {
-        const offset = Math.min(anchor.textOffset, node.length - 1);
-        const range = document.createRange();
-        range.setStart(node, offset);
-        range.setEnd(node, offset + 1);
-        rects = range.getClientRects();
-      }
+    if (typeof target?.path === 'string') {
+      let point;
+      try { point = resolvePoint(target.path); } catch (_) { return { href: resource, missingAnchor: true }; }
+      const {element, node, offset} = point;
+      const rects = node ? textRange(node, offset).getClientRects() : element.getClientRects();
       if (!Array.from(rects).some(anchorVisible)) {
         const rect = rects[0];
         // Locate the exact XPointer even when its text also occurs on another page.
@@ -198,19 +238,17 @@
 
     const css = getComputedStyle(document.documentElement);
     window.SimpleReaderPresentationDocument ??= Math.random();
-    let pointer = null;
-    if (Object.hasOwn(spineIndices, resource)) {
-      try { pointer = capture(spineIndices[resource], single); } catch (_) { /* The visible locator is still usable. */ }
-    }
+    let path = null;
+    try { path = capture(); } catch (_) { /* The visible locator is still usable. */ }
     return {
       href: resource,
       progression: fixed ? 0 : offset / root.scrollWidth,
       tolerance: 2 / root.scrollWidth,
       layout: [window.SimpleReaderPresentationDocument, width, height, root.scrollWidth, root.scrollHeight, offset, window.scrollY,
         css.columnCount, css.columnWidth, css.fontSize].join(':'),
-      pointer
+      path
     };
   }
 
-  window.SimpleReaderBridge = {capture,resolve,fromPoint,presentation};
+  window.SimpleReaderBridge = {capture, contentsIndex, resolve, fromPoint, presentation, textRange};
 })();

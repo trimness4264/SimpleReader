@@ -66,7 +66,7 @@ import WebKit
         self.style = style
         let configuration = WKWebViewConfiguration()
         configuration.setURLSchemeHandler(server, forURLScheme: server.scheme)
-        let source = try Self.bootstrap.get()
+        let source = try "\(EPUBPositionBridge.source)\n\(Self.bootstrap.get())"
         let css = try EPUBPositionBridge.quoted(style.css)
         configuration.userContentController.addUserScript(WKUserScript(
             source: "\(source)(\(css));", injectionTime: .atDocumentStart, forMainFrameOnly: true))

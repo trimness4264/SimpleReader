@@ -45,10 +45,9 @@ struct ContinuousEPUBLayout {
 
     func visibleChapter(in viewport: Viewport) -> Int { chapter(at: viewport.readingTop + 1) }
 
-    func retainedChapters(in viewport: Viewport, target: Int?) -> ClosedRange<Int> {
-        let index = target ?? visibleChapter(in: viewport)
-        let top = target.map { edges[$0] } ?? viewport.readingTop
-        let last = chapter(at: top + viewport.size.height * 2)
+    func retainedChapters(in viewport: Viewport) -> ClosedRange<Int> {
+        let index = visibleChapter(in: viewport)
+        let last = chapter(at: viewport.readingTop + viewport.size.height * 2)
         return max(0, index - 2)...min(chapters.upperBound - 1, max(index + 2, last))
     }
 

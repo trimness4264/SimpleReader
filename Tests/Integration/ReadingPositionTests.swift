@@ -10,12 +10,8 @@ import UIKit
         let file = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "xpointer-unicode", withExtension: "epub", subdirectory: "Fixtures"))
         let readium = ReadiumService()
         let publication = try await readium.open(file)
-        let positions = await EPUBReadingPosition(publication: publication, spine: try await readium.spine(file))
-        let navigator = ContinuousEPUBController(publication: publication, initialLocation: nil, settings: ReaderSettings())
-        let window = present(navigator)
-        defer { navigator.close(); window.isHidden = true }
-        let initial = try await positions.initialPosition(in: navigator, updatedAt: Date())
-        _ = try XCTUnwrap(initial)
+        let spine = try await readium.spine(file)
+        let positions = await EPUBReadingPosition(publication: publication, spine: spine)
 
         // KOReader v2026.07.1, CREngine DOM 20240114. See Scripts/dump_crengine_xpointers.lua.
         let cases: [(id: String, word: String, path: String, start: Int, end: Int)] = [
@@ -26,35 +22,55 @@ import UIKit
             ("preformatted", "afterPreformatted", "pre", 12, 29),
             ("inline-code", "afterCode", "p[2]/code", 10, 19),
         ]
-        let source = try EPUBPositionBridge.source
-        for sample in cases {
-            let path = "/body/DocFragment/body/\(sample.path)/text()"
-            let pointers = ["\(path).\(sample.start)", "\(path).\(sample.end)"]
-            let result = try await navigator.evaluateJavaScript("""
-                \(source)
-                (() => {
-                  const bridge = window.SimpleReaderBridge;
-                  const word = \(try EPUBPositionBridge.quoted(sample.word));
-                  const node = document.getElementById(\(try EPUBPositionBridge.quoted(sample.id))).firstChild;
-                  const start = node.data.indexOf(word);
-                  if (start < 0) throw Error('Missing CREngine sample text: ' + word);
-                  const expected = [start, start + word.length];
-                  const resolved = [\(try EPUBPositionBridge.quoted(pointers[0])), \(try EPUBPositionBridge.quoted(pointers[1]))].map(pointer => {
-                    const anchor = bridge.resolve(pointer);
-                    const resolvedNode = document.querySelector(anchor.cssSelector).childNodes[anchor.textNodeIndex];
-                    return resolvedNode === node ? anchor.textOffset : null;
-                  });
-                  return {
-                    expected,
-                    resolved,
-                    encoded: expected.map(offset => bridge.fromPoint(node, offset, 0, true))
-                  };
-                })();
-                """).get()
-            let values = try XCTUnwrap(result as? [String: Any])
-            let expected = try XCTUnwrap(values["expected"] as? [Int])
-            XCTAssertEqual(values["resolved"] as? [Int], expected, "Resolve \(pointers)")
-            XCTAssertEqual(values["encoded"] as? [String], pointers, "Encode \(sample.word) in \(sample.path)")
+        for layout in [ReadingLayout.paginated, .scroll] {
+            try await withEPUBReader(publication: publication, spine: spine, layout: layout) { reader, navigator in
+                if layout == .paginated {
+                    let href = try XCTUnwrap(reader.currentLocation?.href.string)
+                    _ = try await navigator.evaluatePositionJavaScript("""
+                        document.getElementById('preformatted').style.breakBefore = 'column';
+                        true;
+                        """, in: href)
+                }
+                for sample in cases {
+                    let path = "/body/DocFragment/body/\(sample.path)/text()"
+                    let pointers = ["\(path).\(sample.start)", "\(path).\(sample.end)"]
+                    let targets = try pointers.map(positions.target(for:))
+                    let resource = targets[0].resource.href
+                    let paths = String(decoding: try JSONEncoder().encode(targets.map(\.path)), as: UTF8.self)
+                    let page = try await reader.move(to: .checkpoint(nil, pointer: pointers[0]), isCurrent: { true })
+                    let location = try XCTUnwrap(page?.locator ?? reader.currentLocation)
+                    XCTAssertEqual(location.href.string, resource)
+                    if layout == .paginated, sample.id == "preformatted" {
+                        XCTAssertGreaterThan(location.locations.progression ?? 0, 0)
+                        XCTAssertEqual(page?.position.xpointer, "/body/DocFragment/body/pre/text().0")
+                    }
+
+                    let result = try await navigator.evaluatePositionJavaScript("""
+                        (() => {
+                          const bridge = window.SimpleReaderBridge;
+                          const word = \(try EPUBPositionBridge.quoted(sample.word));
+                          const node = document.getElementById(\(try EPUBPositionBridge.quoted(sample.id))).firstChild;
+                          const start = node.data.indexOf(word);
+                          if (start < 0) throw Error('Missing CREngine sample text: ' + word);
+                          const expected = [start, start + word.length];
+                          const resolved = \(paths).map(path => {
+                            const anchor = bridge.resolve(path);
+                            const resolvedNode = document.querySelector(anchor.cssSelector).childNodes[anchor.textNodeIndex];
+                            return anchor.kind === 'text' && resolvedNode === node ? anchor.textOffset : null;
+                          });
+                          return {expected, resolved, paths: expected.map(offset => bridge.fromPoint(node, offset))};
+                        })();
+                        """, in: resource)
+                    let values = try XCTUnwrap(result as? [String: Any])
+                    let expected = try XCTUnwrap(values["expected"] as? [Int])
+                    let captured = try XCTUnwrap(values["paths"] as? [String]).compactMap { positions.pointer(path: $0, href: resource) }
+                    XCTAssertEqual(values["resolved"] as? [Int], expected, "\(layout) resolves \(pointers)")
+                    XCTAssertEqual(captured, pointers, "\(layout) encodes \(sample.word) in \(sample.path)")
+                    if layout == .scroll {
+                        XCTAssertEqual(location.locations.otherLocations["continuousTextOffset"] as? Int, expected.first)
+                    }
+                }
+            }
         }
     }
 
@@ -62,68 +78,94 @@ import UIKit
         let readium = ReadiumService()
         let file = try epubFile()
         let publication = try await readium.open(file)
-        let positions = await EPUBReadingPosition(publication: publication, spine: try await readium.spine(file))
-        let navigator = ContinuousEPUBController(publication: publication, initialLocation: nil, settings: ReaderSettings())
-        let window = present(navigator)
-        defer { navigator.close(); window.isHidden = true }
-        let initial = try await positions.initialPosition(in: navigator, updatedAt: Date(timeIntervalSince1970: 100))
-        XCTAssertNotNil(initial)
+        let spine = try await readium.spine(file)
+        let positions = await EPUBReadingPosition(publication: publication, spine: spine)
         let pointer = "/body/DocFragment[2]/body/p/text().0"
 
-        let locator = try await positions.go(toPointer: pointer, in: navigator, isCurrent: { true })
-        let captured = try await positions.capture(locator, in: navigator)
-        navigator.updateScrollInsets(UIEdgeInsets(top: 64, left: 0, bottom: 42, right: 0))
-        let insetPointer = try await positions.capture(try XCTUnwrap(navigator.currentLocation), in: navigator)
-        XCTAssertEqual(insetPointer, captured)
-        let first = try XCTUnwrap(publication.readingOrder.first)
-        try await positions.go(to: first, in: navigator, isCurrent: { true })
-        var settings = ReaderSettings()
-        settings.fontSize = 180
-        navigator.updateSettings(settings)
-        try await positions.restore(locator, pointer: captured, in: navigator, isCurrent: { true })
+        try await withEPUBReader(publication: publication, spine: spine, layout: .scroll) { reader, navigator in
+            let controller = try XCTUnwrap(navigator as? ContinuousEPUBController)
+            try await reader.move(to: .checkpoint(nil, pointer: pointer), isCurrent: { true })
+            let locator = try XCTUnwrap(reader.currentLocation)
+            let captured = try await positions.capture(locator, in: navigator)
+            controller.updateScrollInsets(UIEdgeInsets(top: 64, left: 0, bottom: 42, right: 0))
+            let insetPointer = try await positions.capture(try XCTUnwrap(navigator.currentLocation), in: navigator)
+            XCTAssertEqual(insetPointer, captured)
+            let first = try XCTUnwrap(publication.readingOrder.first)
+            try await reader.move(to: .link(first), isCurrent: { true })
+            var settings = ReaderSettings()
+            settings.fontSize = 180
+            controller.updateSettings(settings)
+            try await reader.move(to: .checkpoint(locator, pointer: captured), isCurrent: { true })
 
-        XCTAssertEqual(navigator.currentLocation?.href.string, "second.xhtml")
-        let restored = try await positions.capture(try XCTUnwrap(navigator.currentLocation), in: navigator)
-        XCTAssertEqual(restored, captured)
+            XCTAssertEqual(navigator.currentLocation?.href.string, "second.xhtml")
+            let restored = try await positions.capture(try XCTUnwrap(navigator.currentLocation), in: navigator)
+            XCTAssertEqual(restored, captured)
+        }
     }
 
     func testImageOnlyChapterProducesARestorableElementAnchor() async throws {
         let readium = ReadiumService()
         let file = try epubFile()
         let publication = try await readium.open(file)
-        let positions = await EPUBReadingPosition(publication: publication, spine: try await readium.spine(file))
-        let navigator = ContinuousEPUBController(publication: publication, initialLocation: nil, settings: ReaderSettings())
-        let window = present(navigator)
-        defer { navigator.close(); window.isHidden = true }
-        let initial = try await positions.initialPosition(in: navigator, updatedAt: Date())
-        XCTAssertNotNil(initial)
+        let spine = try await readium.spine(file)
+        let positions = await EPUBReadingPosition(publication: publication, spine: spine)
         let pointer = "/body/DocFragment[3]/body/svg"
 
-        let locator = try await positions.go(toPointer: pointer, in: navigator, isCurrent: { true })
-        let captured = try await positions.capture(locator, in: navigator)
-
-        XCTAssertEqual(captured, pointer)
-        XCTAssertEqual(navigator.currentLocation?.href.string, "image.xhtml")
+        for layout in [ReadingLayout.paginated, .scroll] {
+            try await withEPUBReader(publication: publication, spine: spine, layout: layout) { reader, navigator in
+                // CREngine also expresses media starts as element offsets without a text node.
+                let page = try await reader.move(to: .checkpoint(nil, pointer: pointer + ".0"), isCurrent: { true })
+                let locator = try XCTUnwrap(page?.locator ?? reader.currentLocation)
+                let captured = try await positions.capture(locator, in: navigator)
+                XCTAssertEqual(captured, pointer, "\(layout)")
+                XCTAssertEqual(locator.href.string, "image.xhtml")
+                XCTAssertNil(locator.locations.otherLocations["continuousTextNodeIndex"])
+            }
+        }
     }
 
     func testSupersededRestorationDoesNotMoveReader() async throws {
         let readium = ReadiumService()
         let file = try epubFile()
         let publication = try await readium.open(file)
-        let positions = await EPUBReadingPosition(publication: publication, spine: try await readium.spine(file))
-        let navigator = ContinuousEPUBController(publication: publication, initialLocation: nil, settings: ReaderSettings())
-        let window = present(navigator)
-        defer { navigator.close(); window.isHidden = true }
-        let initial = try await positions.initialPosition(in: navigator, updatedAt: Date())
-        XCTAssertNotNil(initial)
-        let original = navigator.currentLocation?.href.string
+        let spine = try await readium.spine(file)
+        try await withEPUBReader(publication: publication, spine: spine, layout: .scroll) { reader, navigator in
+            let original = navigator.currentLocation?.href.string
+            do {
+                try await reader.move(to: .checkpoint(nil, pointer: "/body/DocFragment[2]/body/p/text().0"), isCurrent: { false })
+                XCTFail("A superseded restoration must be cancelled")
+            } catch is CancellationError {} catch { XCTFail("Expected cancellation, received \(error)") }
+            XCTAssertEqual(navigator.currentLocation?.href.string, original)
+        }
+    }
 
-        do {
-            _ = try await positions.go(toPointer: "/body/DocFragment[2]/body/p/text().0", in: navigator, isCurrent: { false })
-            XCTFail("A superseded restoration must be cancelled")
-        } catch is CancellationError {} catch { XCTFail("Expected cancellation, received \(error)") }
+    func testContinuousEPUBReopensWhenSavedXPointerNoLongerResolves() async throws {
+        let file = try epubFile()
+        let readium = ReadiumService()
+        let publication = try await readium.open(file)
+        let spine = try await readium.spine(file)
+        let saved = ReadingPosition(progression: 0.5, xpointer: "/body/DocFragment[2]/body/missing", updatedAt: Date())
 
-        XCTAssertEqual(navigator.currentLocation?.href.string, original)
+        try await withEPUBReader(publication: publication, spine: spine, layout: .scroll, restoring: saved) { reader, _ in
+            XCTAssertEqual(reader.currentLocation?.href.string, spine.first)
+        }
+    }
+
+    private func withEPUBReader(publication: Publication, spine: [String], layout: ReadingLayout,
+                                restoring saved: ReadingPosition? = nil,
+                                body: (EPUBReader, EPUBReadingNavigator) async throws -> Void) async throws {
+        var settings = ReaderSettings()
+        settings.layout = layout
+        let reader = try await EPUBReader(publication: publication, spine: spine, configuration: {
+            .init(settings: settings, twoPages: false, systemIsDark: false)
+        }, locator: nil)
+        let container = ReaderContainerController()
+        let window = present(container)
+        defer { reader.close(); window.isHidden = true }
+        reader.install(in: container)
+        let initial = try await reader.initialSnapshot(restoring: saved, isCurrent: { true })
+        _ = try XCTUnwrap(initial)
+        try await body(reader, try XCTUnwrap(container.children.first as? EPUBReadingNavigator))
     }
 
     func testEarlierChapterRemeasurementPreservesTheReadableRange() throws {
@@ -588,6 +630,8 @@ import UIKit
         await session.load()
         XCTAssertTrue(session.ready, session.error ?? "Reader not ready")
         let spine = try await readium.spine(store.fileURL(book.filePath))
+        let originalNavigator = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
+        let positions = await EPUBReadingPosition(publication: originalNavigator.publication, spine: spine)
         let initial = try XCTUnwrap(store.book(book.id)?.position?.xpointer)
         let contentsIDs = session.contents.map(\.id)
         await session.go(try XCTUnwrap(session.contents.dropFirst().first))
@@ -610,7 +654,7 @@ import UIKit
             XCTAssertEqual(store.book(book.id)?.position, saved)
             let navigator = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
             let locator = try XCTUnwrap(navigator.currentLocation)
-            let visible = try await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: spine)
+            let visible = try await positions.capture(locator, in: navigator)
             XCTAssertEqual(visible, saved.xpointer)
             XCTAssertEqual(session.contents.map(\.id), contentsIDs)
             XCTAssertTrue(session.canReturnToPreviousPosition)
@@ -634,7 +678,7 @@ import UIKit
         XCTAssertNil(session.recoveryError)
         XCTAssertTrue(previousNavigator === session.container.children.first)
         let resizedLocator = try XCTUnwrap(previousNavigator.currentLocation)
-        let resizedPointer = try await EPUBPositionBridge.capture(navigator: previousNavigator, locator: resizedLocator, spine: spine)
+        let resizedPointer = try await positions.capture(resizedLocator, in: previousNavigator)
         XCTAssertEqual(resizedPointer, saved.xpointer)
         XCTAssertEqual(store.book(book.id)?.position, saved)
 
@@ -649,7 +693,7 @@ import UIKit
         }
         let replacement = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
         let recoveredLocation = try XCTUnwrap(replacement.currentLocation)
-        let recoveredPointer = try await EPUBPositionBridge.capture(navigator: replacement, locator: recoveredLocation, spine: spine)
+        let recoveredPointer = try await positions.capture(recoveredLocation, in: replacement)
         XCTAssertFalse(previousNavigator === replacement)
         XCTAssertFalse(session.isRestoring)
         XCTAssertNil(session.recoveryError)
