@@ -95,11 +95,11 @@ import XCTest
 @MainActor final class ProgressServer: ProgressSyncClient {
     var remote: RemoteProgress?
     var onUpload: (() async throws -> Void)?
-    var onRead: (() throws -> Void)?
+    var onRead: (() async throws -> Void)?
     var confirmsUpload = true
 
     func get(document: String) async throws -> RemoteProgress? {
-        try onRead?()
+        try await onRead?()
         return remote
     }
 

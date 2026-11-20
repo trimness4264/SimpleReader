@@ -37,12 +37,17 @@ import ReadiumShared
         }
     }
 
+    private struct PendingLocation {
+        let locator: Locator
+        let requiresConfirmation: Bool
+    }
+
     private let bookID: UUID
     private let store: LibraryStore
     private let sync: SyncCoordinator
     private(set) var current: ReadingPosition?
     private(set) var latestLocator: Locator?
-    private var pendingLocator: Locator?
+    private var pendingLocation: PendingLocation?
     private var capture: Task<Void, Never>?
     private var restoration: Task<Void, Never>?
     private(set) var previous: Checkpoint?
@@ -151,20 +156,26 @@ import ReadiumShared
 
     func finishRestoration(at locator: Locator?) {
         latestLocator = locator
-        pendingLocator = nil
+        pendingLocation = nil
         state = .idle
     }
 
-    func observe(_ locator: Locator, capture: @escaping (Locator, Int) async -> Void) {
-        guard locator.jsonString != latestLocator?.jsonString else { return }
-        latestLocator = locator
-        pendingLocator = locator.jsonString == current?.locatorJSON ? nil : locator
+    func observe(_ locator: Locator, requiresConfirmation: Bool, capture: @escaping (Locator, Int) async -> Void) {
+        if let previous = pendingLocation?.locator ?? latestLocator {
+            if locator.jsonString == previous.jsonString { return }
+            // A late Readium notification can describe the same measured page with different metadata.
+            if requiresConfirmation, EPUBPositionBridge.normalize(locator.href.string) == EPUBPositionBridge.normalize(previous.href.string),
+               abs((locator.locations.progression ?? 0) - (previous.locations.progression ?? 0)) < 0.000_001 { return }
+        }
+        if !requiresConfirmation { latestLocator = locator }
+        pendingLocation = locator.jsonString == current?.locatorJSON ? nil :
+            PendingLocation(locator: locator, requiresConfirmation: requiresConfirmation)
         invalidate()
         scheduleCapture(capture)
     }
 
     func scheduleCapture(_ capture: @escaping (Locator, Int) async -> Void) {
-        guard let locator = pendingLocator else { return }
+        guard let locator = pendingLocation?.locator else { return }
         self.capture?.cancel()
         let revision = revision
         self.capture = Task {
@@ -174,14 +185,16 @@ import ReadiumShared
     }
 
     func flush(using capture: (Locator, Int) async -> Void) async {
-        guard let locator = pendingLocator else { return }
+        guard let locator = pendingLocation?.locator else { return }
         self.capture?.cancel()
         revision += 1
         await capture(locator, revision)
     }
 
     func savePendingLocation() throws {
-        guard let locator = pendingLocator, locator.jsonString != current?.locatorJSON else { return }
+        guard let pendingLocation, !pendingLocation.requiresConfirmation else { return }
+        let locator = pendingLocation.locator
+        guard locator.jsonString != current?.locatorJSON else { return }
         // Keep the locator usable if the process stops before text capture finishes.
         try commit(ReadingPosition(progression: locator.locations.totalProgression ?? current?.progression ?? 0,
             locatorJSON: locator.jsonString, updatedAt: Date()), from: .movement)
@@ -219,7 +232,7 @@ import ReadiumShared
             current = position
             if let locator = locator {
                 latestLocator = locator
-                pendingLocator = nil
+                pendingLocation = nil
             }
             persistenceError = nil
             return changed

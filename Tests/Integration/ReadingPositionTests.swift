@@ -136,6 +136,73 @@ import UIKit
         await session.close()
     }
 
+    func testPaginatedJumpRejectsMissingAnchorAndKeepsReadingPosition() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: epubFile())
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let window = present(session.container)
+        defer { window.isHidden = true }
+        await session.load()
+        let initial = try XCTUnwrap(store.book(book.id)?.position)
+        var link = try XCTUnwrap(session.contents.dropFirst().first?.link)
+        link.href += "#missing-anchor"
+
+        await session.go(ContentsItem(title: "Missing anchor", link: link, pdfPage: nil))
+
+        XCTAssertNotNil(session.error)
+        XCTAssertEqual(store.book(book.id)?.position, initial)
+        XCTAssertFalse(session.canReturnToPreviousPosition)
+        XCTAssertFalse(session.isNavigating)
+        XCTAssertTrue(session.container.view.isUserInteractionEnabled)
+
+        await session.jump(toProgression: 1)
+        XCTAssertTrue(session.canReturnToPreviousPosition)
+        XCTAssertEqual(store.book(book.id)?.position?.xpointer, "/body/DocFragment[3]/body/svg")
+        await session.close()
+    }
+
+    func testOlderRemoteResponseCannotReplaceANewPaginatedJump() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: epubFile())
+        let server = ProgressServer()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+        let window = present(session.container)
+        defer { window.isHidden = true }
+        await session.load()
+        XCTAssertTrue(session.ready, session.error ?? "Reader not ready")
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+        server.remote = RemoteProgress(progress: "/body/DocFragment[2]/body/p/text().0", percentage: 0.5,
+            timestamp: 200, device_id: "other")
+
+        let readStarted = expectation(description: "Remote response waiting")
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        defer { release.finish() }
+        server.onRead = {
+            readStarted.fulfill()
+            for await _ in gate { break }
+        }
+        let synchronize = Task { await session.synchronize() }
+        await fulfillment(of: [readStarted], timeout: 10)
+        await session.jump(toProgression: 1)
+        let jumped = try XCTUnwrap(store.book(book.id)?.position)
+        XCTAssertEqual(jumped.xpointer, "/body/DocFragment[3]/body/svg")
+        release.finish()
+        await synchronize.value
+
+        XCTAssertEqual(store.book(book.id)?.position, jumped)
+        XCTAssertNil(store.book(book.id)?.remoteBaseline)
+        XCTAssertNil(session.prompt)
+        XCTAssertTrue(session.container.view.isUserInteractionEnabled)
+        server.onRead = nil
+        await session.close()
+    }
+
     func testOlderRemoteResponseCannotReplaceANewPageTurn() async throws {
         let store = try library()
         let readium = ReadiumService()
@@ -498,6 +565,27 @@ import UIKit
         }
 
         let previousNavigator = try XCTUnwrap(session.container.children.first as? EPUBReadingNavigator)
+        try session.saveReaderSettings { $0.fontSize = 190 }
+        XCTAssertTrue(session.isRestoring)
+        let fontRestored = expectChange("Paginated font change restored") { _ = session.isRestoring }
+        await fulfillment(of: [fontRestored], timeout: 10)
+        XCTAssertFalse(session.isRestoring)
+        XCTAssertNil(session.recoveryError)
+
+        let viewport = session.container.view!
+        viewport.frame.size.width -= 60
+        viewport.layoutIfNeeded()
+        XCTAssertTrue(session.isRestoring)
+        let sizeRestored = expectChange("Paginated width change restored") { _ = session.isRestoring }
+        await fulfillment(of: [sizeRestored], timeout: 10)
+        XCTAssertFalse(session.isRestoring)
+        XCTAssertNil(session.recoveryError)
+        XCTAssertTrue(previousNavigator === session.container.children.first)
+        let resizedLocator = try XCTUnwrap(previousNavigator.currentLocation)
+        let resizedPointer = try await EPUBPositionBridge.capture(navigator: previousNavigator, locator: resizedLocator, spine: spine)
+        XCTAssertEqual(resizedPointer, saved.xpointer)
+        XCTAssertEqual(store.book(book.id)?.position, saved)
+
         session.resignActive()
         await session.retryRecovery()
         XCTAssertTrue(session.isRestoring)

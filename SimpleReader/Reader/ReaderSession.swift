@@ -142,9 +142,19 @@ import ReadiumShared
             guard var book = store.book(bookID) else { throw AppFailure("The book has been deleted.") }
             book.lastOpenedAt = Date(); try store.save(book)
             try await renderer.open(book, at: store.fileURL(book.filePath))
-            // Allow layout and the initial location event to finish before tracking user movement.
-            try await Task.sleep(nanoseconds: 350_000_000)
-            try await initialCheckpoint()
+            while true {
+                let revision = positions.revision
+                do {
+                    try await initialCheckpoint(revision: revision)
+                    break
+                } catch is CancellationError where !closed && !Task.isCancelled && revision != positions.revision {
+                    // A lifecycle change can invalidate the first attempt before the reader is ready.
+                    if epub?.needsNavigationReplacement == true {
+                        let locator = try positions.current?.locatorJSON.flatMap { try Locator(jsonString: $0) }
+                        try renderer.rebuildEPUB(at: locator)
+                    }
+                }
+            }
             guard !closed else { return }
             ready = true
             if isActive { await progressSync.checkOnOpen() }
@@ -154,23 +164,26 @@ import ReadiumShared
             self.error = error.localizedDescription
         }
     }
-    private func initialCheckpoint() async throws {
+    private func initialCheckpoint(revision: Int) async throws {
         let updatedAt = positions.current?.updatedAt ?? Date()
         var position: ReadingPosition?
+        var locator: Locator?
         if let epub {
             let snapshot = try await epub.initialSnapshot(restoring: positions.current) {
-                self.epub === epub && !self.closed && !Task.isCancelled
+                self.positions.isCurrent(revision) && self.epub === epub && !self.closed
             }
-            guard self.epub === epub, !closed, !Task.isCancelled else { throw CancellationError() }
+            guard self.epub === epub else { throw CancellationError() }
             position = snapshot?.position
+            locator = snapshot?.locator
         } else if let pdf = pdf {
             position = try await pdf.open(at: positions.current?.pdfPage, updatedAt: updatedAt) {
-                self.pdf === pdf && !self.closed && !Task.isCancelled
+                self.positions.isCurrent(revision) && self.pdf === pdf && !self.closed
             }
-            guard self.pdf === pdf, !closed, !Task.isCancelled else { throw CancellationError() }
+            guard self.pdf === pdf else { throw CancellationError() }
         }
+        guard positions.isCurrent(revision), !closed else { throw CancellationError() }
         if let position = position {
-            try commit(position, from: .checkpoint, locator: epub?.currentLocation)
+            try commit(position, from: .checkpoint, locator: locator)
         }
     }
     func updateScrollInsets(_ insets: UIEdgeInsets?) {
@@ -199,7 +212,7 @@ import ReadiumShared
         case .epub(let event, let epub):
             switch event {
             case .locationChanged(let locator):
-                self.locationChanged(locator)
+                self.locationChanged(locator, requiresConfirmation: !epub.isScrolling)
             case .movementBegan:
                 self.positions.movementBegan()
             case .linkActivated(let link):
@@ -237,9 +250,6 @@ import ReadiumShared
             switch event {
             case .committed(let position): progression = position.progression
             case .failed(let error): self.error = error.localizedDescription
-            case .cancelTransition(let error):
-                container.cancelPageTransition()
-                self.error = error.localizedDescription
             case .discarded: resumePendingLocationCapture()
             }
         }
@@ -257,17 +267,19 @@ import ReadiumShared
         }
     }
 
-    private func locationChanged(_ locator: Locator) {
+    private func locationChanged(_ locator: Locator, requiresConfirmation: Bool) {
         guard ready, isActive, positions.activity == .idle, !closed, !container.isTurningPage else { return }
-        progression = locator.locations.totalProgression ?? progression
-        positions.observe(locator) { [weak self] locator, revision in
+        if !requiresConfirmation { progression = locator.locations.totalProgression ?? progression }
+        positions.observe(locator, requiresConfirmation: requiresConfirmation) { [weak self] locator, revision in
             await self?.captureEPUB(locator, revision: revision)
         }
     }
     private func captureEPUB(_ locator: Locator, revision: Int) async {
         guard positions.isCurrent(revision), positions.activity == .idle, !closed, !container.isTurningPage,
               let epub else { return }
-        let captured = try? await epub.capture(.movement(locator), fallbackProgression: progression)
+        let captured = try? await epub.capture(.movement(locator), fallbackProgression: progression) {
+            self.positions.isCurrent(revision) && self.epub === epub && !self.closed && !self.container.isTurningPage
+        }
         guard positions.isCurrent(revision), self.epub === epub, !closed, !container.isTurningPage,
               let captured else { return }
         do {
@@ -406,6 +418,8 @@ import ReadiumShared
                 else if epub != nil { updateBridgeWarning() }
             case .rolledBack(let origin, let error):
                 progression = origin?.progression ?? progression
+                onFailure(error)
+            case .failed(let error):
                 onFailure(error)
             }
         }

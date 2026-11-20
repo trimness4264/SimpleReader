@@ -14,7 +14,7 @@ import Observation
     private let canProtect: @MainActor () -> Bool
     private let canRestore: @MainActor () -> Bool
     private let onEvent: @MainActor (Event) -> Void
-    @ObservationIgnored private var rebuildOnRetry = false
+    @ObservationIgnored private var rebuildOnRestore = false
     private(set) var error: String?
 
     init(renderer: ReaderRenderer, positions: ReaderPositionSession, canProtect: @escaping @MainActor () -> Bool,
@@ -63,13 +63,15 @@ import Observation
 
     func prepareRetry() {
         protect()
-        rebuildOnRetry = true
+        rebuildOnRestore = true
     }
 
-    func recover(_ navigation: ReaderPositionSession.Navigation) {
+    @discardableResult
+    func recover(_ navigation: ReaderPositionSession.Navigation, rebuildEPUB: Bool = false) -> Task<Void, Never>? {
         positions.recover(navigation)
+        if rebuildEPUB { rebuildOnRestore = true }
         renderer.epub?.cancelNavigation()
-        schedule()
+        return schedule()
     }
 
     @discardableResult
@@ -102,13 +104,14 @@ import Observation
         guard isCurrent(revision) else { throw CancellationError() }
         error = nil
         let epub: EPUBReader?
-        if renderer.epub != nil {
-            if rebuildOnRetry { try renderer.rebuildEPUB(at: checkpoint.locator) }
+        var presented: EPUBReader.Snapshot?
+        if let previous = renderer.epub {
+            if rebuildOnRestore || previous.needsNavigationReplacement { try renderer.rebuildEPUB(at: checkpoint.locator) }
             guard let current = renderer.epub, let location = checkpoint.locator else {
                 throw AppFailure("Couldn’t read the last reading position.")
             }
             epub = current
-            try await current.move(to: .checkpoint(location, pointer: checkpoint.position?.xpointer)) {
+            presented = try await current.move(to: .checkpoint(location, pointer: checkpoint.position?.xpointer)) {
                 self.isCurrent(revision) && self.renderer.epub === current
             }
         } else {
@@ -121,17 +124,24 @@ import Observation
             }
         }
         guard isCurrent(revision), renderer.epub === epub else { throw CancellationError() }
+        let locator = presented?.locator ?? epub?.currentLocation
         var checkedPointer = false
-        if let epub, let locator = epub.currentLocation,
+        if let epub, let locator,
            var position = checkpoint.position, position.xpointer == nil {
-            let captured = try? await epub.capture(.movement(locator), fallbackProgression: position.progression)
+            let captured: EPUBReader.Snapshot?
+            if let presented { captured = presented }
+            else {
+                captured = try? await epub.capture(.movement(locator), fallbackProgression: position.progression) {
+                    self.isCurrent(revision) && self.renderer.epub === epub
+                }
+            }
             position.xpointer = captured?.position.xpointer
             guard isCurrent(revision), renderer.epub === epub else { throw CancellationError() }
             if position.xpointer != nil { try positions.commit(position, from: .checkpoint) }
             checkedPointer = true
         }
-        rebuildOnRetry = false
+        rebuildOnRestore = false
         onEvent(.restored(checkpoint.position, checkedPointer: checkedPointer))
-        positions.finishRestoration(at: epub?.currentLocation)
+        positions.finishRestoration(at: locator)
     }
 }

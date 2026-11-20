@@ -1,11 +1,12 @@
 import Foundation
 import ReadiumShared
 import ReadiumNavigator
+import WebKit
 
 /// Owns the publication's chapter mapping and the DOM work needed to capture or move a position.
 @MainActor final class EPUBReadingPosition {
     private let publication: Publication
-    private let spine: [String]
+    let spine: [String]
     private var progressionRanges: [String: ClosedRange<Double>] = [:]
 
     init(publication: Publication, spine: [String]) async {
@@ -35,14 +36,15 @@ import ReadiumNavigator
         try await EPUBPositionBridge.capture(navigator: navigator, locator: locator, spine: spine)
     }
 
-    func initialPosition(in navigator: EPUBReadingNavigator, updatedAt: Date) async throws -> ReadingPosition? {
+    func initialPosition(in navigator: EPUBReadingNavigator, updatedAt: Date, isCurrent: @MainActor () -> Bool = { true }) async throws -> ReadingPosition? {
         // A cold WebKit chapter can take longer than the normal navigation timeout.
         for _ in 0..<100 {
-            try Task.checkCancellation()
+            try check(isCurrent)
             if let location = navigator.currentLocation {
                 let locator = adjusted(location)
                 do {
                     let pointer = try await capture(locator, in: navigator)
+                    try check(isCurrent)
                     return ReadingPosition(progression: locator.locations.totalProgression ?? 0,
                         locatorJSON: locator.jsonString, xpointer: pointer, updatedAt: updatedAt)
                 } catch is CancellationError {
@@ -58,14 +60,16 @@ import ReadiumNavigator
 
     func go(to locator: Locator, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws {
         try check(isCurrent)
-        guard await navigator.go(to: locator) else { throw AppFailure("Couldn’t jump to the selected position.") }
-        try await settle(isCurrent)
+        let moved = await navigator.go(to: locator)
+        try check(isCurrent)
+        guard moved else { throw AppFailure("Couldn’t jump to the selected position.") }
     }
 
     func go(to link: Link, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws {
         try check(isCurrent)
-        guard await navigator.go(to: link) else { throw AppFailure("Couldn’t open the chapter.") }
-        try await settle(isCurrent)
+        let moved = await navigator.go(to: link)
+        try check(isCurrent)
+        guard moved else { throw AppFailure("Couldn’t open the chapter.") }
     }
 
     func go(toProgression value: Double, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws -> Locator {
@@ -84,41 +88,14 @@ import ReadiumNavigator
 
     func restore(_ locator: Locator?, pointer: String?, in navigator: EPUBReadingNavigator, isCurrent: @MainActor () -> Bool) async throws {
         if let locator = locator {
-            if navigator is ContinuousEPUBController {
-                // Continuous navigation confirms its target document and layout before returning.
-                try check(isCurrent)
-                let loaded = await navigator.go(to: locator)
-                try check(isCurrent)
-                guard loaded else { throw AppFailure("Restoring the text timed out. Try again.") }
-            } else {
-                var loaded = false
-                for _ in 0..<50 {
-                    try check(isCurrent)
-                    if await navigator.go(to: locator) {
-                        try check(isCurrent)
-                        let result = await navigator.evaluateJavaScript("Boolean(document.body && document.readyState !== 'loading')")
-                        try check(isCurrent)
-                        if (try? result.get()) as? Bool == true { loaded = true; break }
-                    }
-                    try await Task.sleep(nanoseconds: 100_000_000)
-                }
-                guard loaded else { throw AppFailure("Restoring the text timed out. Try again.") }
-            }
+            // Continuous navigation confirms its target document and layout before returning.
+            try await go(to: locator, in: navigator, isCurrent: isCurrent)
         }
         if let pointer = pointer {
             _ = try await go(toPointer: pointer, in: navigator, isCurrent: isCurrent)
-        } else {
-            guard locator != nil else { throw AppFailure("Couldn’t read the last reading position.") }
-            try await settle(isCurrent)
+        } else if locator == nil {
+            throw AppFailure("Couldn’t read the last reading position.")
         }
-    }
-
-    func settledPage(in navigator: EPUBNavigatorViewController) async throws -> (locator: Locator, pointer: String) {
-        guard let visible = await navigator.firstVisibleElementLocator() else { throw AppFailure("Couldn’t read the position after turning the page. Try again.") }
-        let result = try await navigator.evaluateJavaScript("Math.abs(window.scrollX) / document.scrollingElement.scrollWidth").get()
-        guard let fraction = result as? Double else { throw AppFailure("Couldn’t read progress after turning the page.") }
-        let locator = adjusted(visible.copy(locations: { $0.progression = min(max(fraction, 0), 1) }))
-        return (locator, try await capture(locator, in: navigator))
     }
 
     func contentsID(in navigator: EPUBReadingNavigator, contents: [ContentsItem]) async -> UUID? {
@@ -171,11 +148,240 @@ import ReadiumNavigator
         }
     }
 
-    private func settle(_ isCurrent: @MainActor () -> Bool) async throws {
+    private func check(_ isCurrent: @MainActor () -> Bool) throws {
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
+    }
+}
+
+/// Confirms the Readium viewport and the document it actually evaluates are on the same page.
+@MainActor final class PaginatedEPUBPosition {
+    struct Page {
+        let locator: Locator
+        let pointer: String?
+    }
+
+    private let navigator: EPUBNavigatorViewController
+    private let positions: EPUBReadingPosition
+    private let spineIndices: [String: Int]
+    private let isFixedLayout: Bool
+    private let initialLocator: Locator?
+    private var lastConfirmedLocation: Locator?
+    private var isMoving = false
+    private var abandonedMove = false
+
+    var needsReplacement: Bool { isMoving || abandonedMove }
+
+    var fixedSpreadLocation: Locator? {
+        guard isFixedLayout, let lastConfirmedLocation,
+              navigator.viewport?.readingOrder.contains(where: { matches($0.string, lastConfirmedLocation.href.string) }) == true else { return nil }
+        return lastConfirmedLocation
+    }
+
+    init(navigator: EPUBNavigatorViewController, positions: EPUBReadingPosition, initialLocator: Locator?) {
+        self.navigator = navigator
+        self.positions = positions
+        self.initialLocator = initialLocator
+        isFixedLayout = navigator.publication.metadata.layout == .fixed
+        let indices = Dictionary(positions.spine.enumerated().map { index, href in (EPUBPositionBridge.normalize(href), index) },
+            uniquingKeysWith: { first, _ in first })
+        spineIndices = Dictionary(navigator.publication.readingOrder.compactMap { link in
+            indices[EPUBPositionBridge.normalize(link.href)].map { (link.href, $0) }
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    func open(pointer: String?, isCurrent: @escaping @MainActor () -> Bool) async throws -> Page {
+        let deadline = ContinuousClock.now + .seconds(10)
+        let locator = try initialLocator.map(navigator.publication.normalizeLocator) ?? chapterStart(navigator.publication.readingOrder.first)
+        if let pointer {
+            // Readium may still be initializing, with a saved locator but no loaded spread.
+            _ = try await confirm(nil, deadline: deadline, isCurrent: isCurrent)
+            do {
+                return try await move(to: locator, pointer: pointer, isCurrent: isCurrent)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Older installations may have saved an XPointer that no longer resolves.
+                guard initialLocator != nil else { throw error }
+                return try await move(to: locator, isCurrent: isCurrent)
+            }
+        }
+        if initialLocator?.text.highlight != nil {
+            _ = try await confirm(nil, deadline: deadline, isCurrent: isCurrent)
+            return try await move(to: locator, isCurrent: isCurrent)
+        }
+        return try await confirm(locator, deadline: deadline, isCurrent: isCurrent)
+    }
+
+    func move(to locator: Locator?, pointer: String? = nil, isCurrent: @escaping @MainActor () -> Bool) async throws -> Page {
         try check(isCurrent)
-        // Keep Readium's delayed location events out of user-movement persistence.
-        try await Task.sleep(nanoseconds: 500_000_000)
+        let deadline = ContinuousClock.now + .seconds(5)
+        let target: Locator
+        let request: Locator
+        if let pointer {
+            target = try chapterStart(EPUBPositionBridge.link(for: pointer, in: navigator.publication, spine: positions.spine))
+            // Start near the saved page when it belongs to the XPointer's resource.
+            let progression = locator.flatMap { matches($0.href.string, target.href.string) ? $0.locations.progression : nil }
+            request = target.copy(locations: { $0.progression = progression ?? 0 })
+        } else if let locator {
+            target = navigator.publication.normalizeLocator(locator)
+            request = target.copy(text: { $0 = Locator.Text() })
+        } else {
+            throw AppFailure("Couldn’t read the last reading position.")
+        }
+        if navigator.viewport == nil {
+            _ = try await confirm(nil, deadline: deadline, isCurrent: isCurrent)
+        }
+        try await go(to: request, deadline: deadline, isCurrent: isCurrent)
+        return try await confirm(target, pointer: pointer, deadline: deadline, isCurrent: isCurrent)
+    }
+
+    func visiblePage(matching expected: Locator? = nil, after origin: Locator? = nil,
+                     isCurrent: @escaping @MainActor () -> Bool) async throws -> Page {
+        try await confirm(expected, matchPosition: false, after: origin, deadline: ContinuousClock.now + .seconds(5),
+            isCurrent: isCurrent)
+    }
+
+    func turn(forward: Bool, isCurrent: @escaping @MainActor () -> Bool) async throws -> Bool {
+        let navigator = navigator
+        let options = NavigatorGoOptions(animated: false)
+        return try await bounded(until: ContinuousClock.now + .seconds(5), movingPage: true, isCurrent: isCurrent) {
+            forward ? await navigator.goForward(options: options) : await navigator.goBackward(options: options)
+        }
+    }
+
+    private struct Sample: Equatable {
+        let href: String
+        let layout: String
+        let pointer: String?
+        let webView: ObjectIdentifier
+    }
+
+    private func confirm(_ target: Locator?, pointer: String? = nil, matchPosition: Bool = true, after origin: Locator? = nil,
+                         deadline: ContinuousClock.Instant, isCurrent: @escaping @MainActor () -> Bool) async throws -> Page {
+        let source = try EPUBPositionBridge.source
+        var request: [String: Any] = ["progression": target?.locations.progression ?? 0]
+        request["fragment"] = target?.locations.fragments.first
+        request["pointer"] = pointer
+        let targetJSON = target == nil || !matchPosition ? "null" : String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
+        let indicesJSON = String(decoding: try JSONSerialization.data(withJSONObject: spineIndices), as: UTF8.self)
+        let expected = target.flatMap { resource(matching: $0.href.string)?.href }
+        if target != nil, expected == nil { throw AppFailure("Couldn’t open the chapter.") }
+        var previous: Sample?
+        while ContinuousClock.now < deadline {
+            try check(isCurrent)
+            var observed: Sample?
+            let href = expected ?? (isFixedLayout ? navigator.viewport?.readingOrder.first?.string : nil)
+            if let webView = presentedWebView(), !isFixedLayout || href != nil {
+                let script = try presentationScript(source: source, href: href, target: targetJSON, indices: indicesJSON)
+                let result = try await bounded(until: deadline, isCurrent: isCurrent) {
+                    (try? await webView.evaluateJavaScript(script)) as? [String: Any]
+                }
+                if presentedWebView() === webView, let result, let href = result["href"] as? String,
+                   let resource = resource(matching: href), expected == nil || expected == resource.href {
+                    if result["missingAnchor"] as? Bool == true {
+                        throw AppFailure("Couldn’t jump to the selected position.")
+                    }
+                    if let progression = result["anchorProgression"] as? Double {
+                        let locator = try chapterStart(resource).copy(locations: { $0.progression = progression })
+                        try await go(to: locator, deadline: deadline, isCurrent: isCurrent)
+                    }
+                    if let layout = result["layout"] as? String,
+                       let progression = result["progression"] as? Double, let tolerance = result["tolerance"] as? Double,
+                       let locator = confirmedLocator(for: resource, progression: progression, tolerance: tolerance),
+                       origin.map({ !matches($0.href.string, resource.href) || abs(($0.locations.progression ?? 0) - progression) > tolerance }) ?? true {
+                        let pointer = result["pointer"] as? String
+                        let sample = Sample(href: resource.href, layout: layout, pointer: pointer, webView: ObjectIdentifier(webView))
+                        if previous == sample {
+                            let location = positions.adjusted(locator)
+                            lastConfirmedLocation = location
+                            return Page(locator: location, pointer: pointer)
+                        }
+                        observed = sample
+                    }
+                }
+            }
+            previous = observed
+            try await Task.sleep(for: .milliseconds(25))
+        }
         try check(isCurrent)
+        throw AppFailure("Restoring the text timed out. Try again.")
+    }
+
+    private func resource(matching href: String?) -> Link? {
+        guard let href else { return nil }
+        return navigator.publication.readingOrder.first { matches($0.href, href) }
+    }
+
+    private func presentationScript(source: String, href: String?, target: String, indices: String) throws -> String {
+        let resource = try href.map(EPUBPositionBridge.quoted) ?? "null"
+        let probe = "\(source)\nwindow.SimpleReaderBridge.presentation(\(resource), \(target), \(indices), \(positions.spine.count == 1));"
+        // A fixed-layout spread wraps its resources in separate frames.
+        return isFixedLayout ? "window.spread?.eval(\(resource), \(try EPUBPositionBridge.quoted(probe)))" : probe
+    }
+
+    private func presentedWebView() -> WKWebView? {
+        guard let view = navigator.viewIfLoaded, view.window != nil else { return nil }
+        return ReadiumPageTurnSurface.presentedWebView(in: view, viewport: view)
+    }
+
+    private func confirmedLocator(for resource: Link, progression: Double, tolerance: Double) -> Locator? {
+        if let locator = navigator.currentLocation, matches(locator.href.string, resource.href),
+           abs((locator.locations.progression ?? 0) - progression) <= tolerance {
+            return locator
+        }
+        // Readium publishes scroll changes asynchronously and reports only the leading leaf of a fixed spread.
+        return try? chapterStart(resource).copy(locations: { $0.progression = progression })
+    }
+
+    private func matches(_ left: String, _ right: String) -> Bool {
+        EPUBPositionBridge.normalize(left) == EPUBPositionBridge.normalize(right)
+    }
+
+    private func chapterStart(_ resource: Link?) throws -> Locator {
+        guard let resource, let href = AnyURL(string: resource.href) else { throw AppFailure("Couldn’t open the chapter.") }
+        return Locator(href: href, mediaType: resource.mediaType ?? .xhtml, locations: .init(progression: 0))
+    }
+
+    private func go(to locator: Locator, deadline: ContinuousClock.Instant, isCurrent: @escaping @MainActor () -> Bool) async throws {
+        let navigator = navigator
+        let moved = try await bounded(until: deadline, movingPage: true, isCurrent: isCurrent) { await navigator.go(to: locator) }
+        guard moved else { throw AppFailure("Couldn’t jump to the selected position.") }
+    }
+
+    private func bounded<Value>(until deadline: ContinuousClock.Instant, movingPage: Bool = false, isCurrent: @escaping @MainActor () -> Bool,
+                                operation: @escaping @MainActor () async -> Value) async throws -> Value {
+        try check(isCurrent)
+        if movingPage {
+            guard !needsReplacement else { throw AppFailure("Restoring the text timed out. Try again.") }
+            isMoving = true
+        }
+        // A Readium spread can wait indefinitely for a WebKit load callback.
+        var result: Value?
+        var started = false
+        var validateStart: (@MainActor () -> Bool)? = isCurrent
+        let task = Task { @MainActor in
+            guard !Task.isCancelled, validateStart?() == true else { return }
+            validateStart = nil
+            started = true
+            result = await operation()
+        }
+        defer {
+            validateStart = nil
+            task.cancel()
+            if movingPage {
+                isMoving = false
+                // Readium can finish a cancelled Swift task's move later on the old renderer.
+                abandonedMove = started && result == nil
+            }
+        }
+        while ContinuousClock.now < deadline {
+            try check(isCurrent)
+            if let result { return result }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        try check(isCurrent)
+        throw AppFailure("Restoring the text timed out. Try again.")
     }
 
     private func check(_ isCurrent: @MainActor () -> Bool) throws {

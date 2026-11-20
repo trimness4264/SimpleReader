@@ -99,13 +99,21 @@ import WebKit
         guard let pointer = value as? String else { throw AppFailure("Couldn’t get the EPUB reading position.") }
         return pointer
     }
+
+    static func link(for pointer: String, in publication: Publication, spine: [String]) throws -> Link {
+        let index = try spineIndex(pointer)
+        guard spine.indices.contains(index) else { throw AppFailure("The remote chapter is missing from this book. Check that both devices have the same edition.") }
+        guard let link = publication.readingOrder.first(where: { normalize($0.href) == normalize(spine[index]) }) else {
+            throw AppFailure("The remote position refers to a non-linear or unsupported chapter.")
+        }
+        return link
+    }
+
     static func locator(pointer: String, navigator: EPUBReadingNavigator, spine: [String]? = nil, isCurrent: @MainActor () -> Bool) async throws -> Locator {
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
-        let index = try spineIndex(pointer)
         let hrefs = spine ?? navigator.publication.readingOrder.map(\.href)
-        guard hrefs.indices.contains(index) else { throw AppFailure("The remote chapter is missing from this book. Check that both devices have the same edition.") }
-        guard let link = navigator.publication.readingOrder.first(where: { normalize($0.href) == normalize(hrefs[index]) }) else { throw AppFailure("The remote position refers to a non-linear or unsupported chapter.") }
+        let link = try link(for: pointer, in: navigator.publication, spine: hrefs)
         guard await navigator.go(to: link) else { throw AppFailure("Couldn’t open the remote chapter.") }
         var lastError: Error = AppFailure("The EPUB chapter hasn’t loaded yet.")
         for _ in 0..<20 {

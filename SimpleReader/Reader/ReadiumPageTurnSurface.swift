@@ -47,7 +47,7 @@ import WebKit
 
     func beginDrag() {
         guard let content, let viewport,
-              let web = findWebView(in: content, matching: { self.isVisible($0, in: viewport) }) else { return }
+              let web = Self.presentedWebView(in: content, viewport: viewport) else { return }
         var ancestor = web.superview
         var chapter: UIScrollView?
         while let parent = ancestor, parent !== viewport {
@@ -126,9 +126,7 @@ import WebKit
         // Observe UIKit visibility instead of guessing a rendering delay.
         for _ in 0..<120 {
             guard isCurrent(), viewport.window != nil else { throw CancellationError() }
-            if findWebView(in: content, matching: {
-                self.isVisible($0, in: viewport) && $0.scrollView.alpha > 0.99
-            }) != nil { return }
+            if Self.presentedWebView(in: content, viewport: viewport) != nil { return }
             try await Task.sleep(nanoseconds: 16_000_000)
         }
         throw NSError(domain: "Reader", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "Chapter content isn’t visible yet. Try again.")])
@@ -162,22 +160,25 @@ import WebKit
             && offset.x <= scroll.contentSize.width - scroll.bounds.width + scroll.adjustedContentInset.right + 1
     }
 
-    private func isVisible(_ web: WKWebView, in viewport: UIView) -> Bool {
-        let visible = web.convert(web.bounds, to: viewport).intersection(viewport.bounds)
-        return visible.width > viewport.bounds.width / 2 && visible.height > viewport.bounds.height / 2
+    static func presentedWebView(in content: UIView, viewport: UIView) -> WKWebView? {
+        findWebView(in: content) { web in
+            let visible = web.convert(web.bounds, to: viewport).intersection(viewport.bounds)
+            return visible.width > viewport.bounds.width / 2 && visible.height > viewport.bounds.height / 2
+                && web.scrollView.alpha > 0.99 && !web.isLoading
+        }
     }
 
     private func hasLoadedChapter(at offset: CGPoint, in scroll: UIScrollView) -> Bool {
         let target = CGRect(origin: offset, size: scroll.bounds.size)
         return scroll.subviews.contains { content in
-            findWebView(in: content, matching: { web in
+            Self.findWebView(in: content, matching: { web in
                 let overlap = web.convert(web.bounds, to: scroll).intersection(target)
                 return overlap.width > target.width / 2 && web.scrollView.alpha > 0.99 && !web.isLoading
             }) != nil
         }
     }
 
-    private func findWebView(in content: UIView, matching predicate: (WKWebView) -> Bool) -> WKWebView? {
+    private static func findWebView(in content: UIView, matching predicate: (WKWebView) -> Bool) -> WKWebView? {
         guard !content.isHidden, content.alpha > 0.99 else { return nil }
         if let web = content as? WKWebView { return predicate(web) ? web : nil }
         for child in content.subviews {

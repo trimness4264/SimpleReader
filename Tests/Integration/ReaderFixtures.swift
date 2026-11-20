@@ -7,6 +7,7 @@ import Observation
 extension XCTestCase {
     @MainActor func present(_ controller: UIViewController) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 430, height: 932))
+        window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         window.rootViewController = controller
         window.makeKeyAndVisible()
         controller.view.layoutIfNeeded()

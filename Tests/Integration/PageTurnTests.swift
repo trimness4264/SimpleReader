@@ -17,6 +17,7 @@ import PDFKit
         original.view.backgroundColor = .white
         replacement.view.backgroundColor = .white
         controller.replaceChild(with: original)
+        XCTAssertNotNil(original.view.snapshotView(afterScreenUpdates: true))
 
         let firstStarted = expectation(description: "Original turn reached navigation")
         let (firstGate, releaseFirst) = AsyncStream<Void>.makeStream()
@@ -37,6 +38,7 @@ import PDFKit
             XCTAssertFalse(controller.view.isUserInteractionEnabled)
         }
         controller.replaceChild(with: replacement)
+        XCTAssertNotNil(replacement.view.snapshotView(afterScreenUpdates: true))
         XCTAssertEqual(delegate.cancellations, [true])
         XCTAssertFalse(controller.isTurningPage)
         XCTAssertTrue(controller.view.isUserInteractionEnabled)

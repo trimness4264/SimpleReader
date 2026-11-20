@@ -92,10 +92,15 @@
     const quote = node ? node.data.slice(raw,raw+64) : '';
     return {spine, textNodeIndex:node ? Array.from(node.parentElement.childNodes).indexOf(node) : null, textOffset:raw, cssSelector:selector(node ? node.parentElement : e), highlight:quote, before:node ? node.data.slice(Math.max(0,raw-32),raw) : '', after:node ? node.data.slice(raw+64,raw+96) : ''};
   }
+  function intersectsViewport(rect, viewport = {top: 0, bottom: innerHeight}) {
+    return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < innerWidth &&
+      rect.bottom > viewport.top && rect.top < viewport.bottom;
+  }
+
   function capture(spine, single) {
     if (!document.body || document.readyState === 'loading') throw Error('Chapter is still loading');
-    const viewport = window.SimpleReaderViewport || {top: 0, bottom: innerHeight};
-    const visible = v => v.width > 0 && v.height > 0 && v.right > 0 && v.left < innerWidth && v.bottom > viewport.top && v.top < viewport.bottom;
+    const viewport = window.SimpleReaderViewport;
+    const visible = rect => intersectsViewport(rect, viewport);
     // Keep text and media in document order, so a picture before a caption
     // anchors to the picture. Ignore layout containers and injected content.
     const walker = document.createTreeWalker(document.body,NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,{
@@ -124,5 +129,67 @@
     // Empty pages and CSS background covers still have a valid chapter anchor.
     return path(document.body,spine,single);
   }
-  window.SimpleReaderBridge = {capture,resolve,fromPoint};
+
+  function presentation(href, target, spineIndices, single) {
+    const root = document.scrollingElement;
+    const width = window.innerWidth, height = window.innerHeight;
+    const resource = window.readium?.link?.href;
+    if (!resource || (href !== null && resource !== href) || !document.body || document.readyState !== 'complete' ||
+        document.fonts?.status === 'loading' || !root?.scrollWidth || !width || !height) return null;
+
+    const anchorVisible = rect => intersectsViewport(rect) ||
+      ((!rect.width || !rect.height) && rect.left >= 0 && rect.left < width && rect.top >= 0 && rect.top < height);
+    const offset = Math.abs(window.scrollX);
+    const fixed = !!window.readium.isFixedLayout;
+    if (target?.pointer) {
+      let anchor;
+      try { anchor = resolve(target.pointer); } catch (_) { return { href: resource, missingAnchor: true }; }
+      const element = document.querySelector(anchor.cssSelector);
+      const node = element?.childNodes[anchor.textNodeIndex];
+      if (!element) return { href: resource, missingAnchor: true };
+      let rects = element.getClientRects();
+      if (node?.nodeType === Node.TEXT_NODE && node.length) {
+        const offset = Math.min(anchor.textOffset, node.length - 1);
+        const range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, offset + 1);
+        rects = range.getClientRects();
+      }
+      if (!Array.from(rects).some(anchorVisible)) {
+        const rect = rects[0];
+        // Locate the exact XPointer even when its text also occurs on another page.
+        if (!fixed && rect) {
+          const page = Math.floor((rect.left + window.scrollX + 1) / width) * width;
+          return {href: resource, anchorProgression: Math.min(1, Math.abs(page) / root.scrollWidth)};
+        }
+        return null;
+      }
+    } else if (target?.fragment) {
+      const element = document.getElementById(target.fragment);
+      if (!element) return { href: resource, missingAnchor: true };
+      if (!Array.from(element.getClientRects()).some(anchorVisible)) return null;
+    } else if (!fixed && target) {
+      // Readium rounds down to the start of a screen and clamps at the end.
+      const targetOffset = Math.min(root.scrollWidth - width,
+        Math.floor((root.scrollWidth * target.progression + 1) / width) * width);
+      if (Math.abs(offset - Math.max(0, targetOffset)) > 2) return null;
+    }
+
+    const css = getComputedStyle(document.documentElement);
+    window.SimpleReaderPresentationDocument ??= Math.random();
+    let pointer = null;
+    if (Object.hasOwn(spineIndices, resource)) {
+      try { pointer = capture(spineIndices[resource], single); } catch (_) { /* The visible locator is still usable. */ }
+    }
+    return {
+      href: resource,
+      progression: fixed ? 0 : offset / root.scrollWidth,
+      tolerance: 2 / root.scrollWidth,
+      layout: [window.SimpleReaderPresentationDocument, width, height, root.scrollWidth, root.scrollHeight, offset, window.scrollY,
+        css.columnCount, css.columnWidth, css.fontSize].join(':'),
+      pointer
+    };
+  }
+
+  window.SimpleReaderBridge = {capture,resolve,fromPoint,presentation};
 })();
