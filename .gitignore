@@ -4,4 +4,6 @@ DerivedData/
 xcuserdata/
 .DS_Store
 /.agents/
-/Docs/
+/[Dd]ocs/*
+!/[Dd]ocs/agents/
+!/[Dd]ocs/adr/
