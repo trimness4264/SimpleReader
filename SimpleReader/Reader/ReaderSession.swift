@@ -454,9 +454,9 @@ import ReadiumShared
         await progressSync.respond(to: prompt, with: response)
     }
 
-    private func moveToRemotePosition(_ remote: RemoteProgress, approximate: Bool,
+    private func moveToRemotePosition(_ offer: SyncCoordinator.RemoteOffer, approximate: Bool,
                                       onFailure: @MainActor (ReaderSyncSession.RemoteMoveFailure) -> Void) async {
-        await performNavigation(.remote(remote, approximate: approximate)) { error in
+        await performNavigation(.remote(offer, approximate: approximate)) { error in
             onFailure(.init(error: error, canApproximate: self.epub != nil))
         }
     }

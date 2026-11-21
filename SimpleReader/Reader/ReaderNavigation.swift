@@ -8,7 +8,7 @@ import ReadiumShared
     }
 
     enum Request {
-        case jump(Target), returning(to: ReaderPositionSession.Checkpoint), remote(RemoteProgress, approximate: Bool)
+        case jump(Target), returning(to: ReaderPositionSession.Checkpoint), remote(SyncCoordinator.RemoteOffer, approximate: Bool)
 
         var isRemote: Bool {
             if case .remote = self { return true }
@@ -224,7 +224,8 @@ import ReadiumShared
         switch request {
         case .jump(let selection): target = selection
         case .returning(let previous): target = .checkpoint(previous)
-        case .remote(let remote, let approximate):
+        case .remote(let offer, let approximate):
+            let remote = offer.remote
             if let epub = renderer.epub {
                 let captured = try await epub.remoteSnapshot(remote, approximate: approximate, isCurrent: isCurrent)
                 return (captured.position, captured.locator)

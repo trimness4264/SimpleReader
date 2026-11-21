@@ -19,9 +19,15 @@ struct RootView: View {
                 selectedTab = .library
                 sharedImports.receive(url)
             }
-            .task { _ = sharedImports.recoverInbox() }
+            .task {
+                sharedImports.recoverInbox()
+                environment.sync.start()
+            }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active { sharedImports.recoverInbox() }
+                if phase == .active {
+                    sharedImports.recoverInbox()
+                    environment.sync.retryPending()
+                }
             }
             .onChange(of: sharedImports.pendingCount) { _, count in
                 if count > 0 { selectedTab = .library }

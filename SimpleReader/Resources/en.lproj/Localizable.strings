@@ -222,7 +222,7 @@
 "Sync failed. Tap for details." = "Sync failed. Tap for details.";
 "Sync failed: %@" = "Sync failed: %@";
 "Sync is off" = "Sync is off";
-"Sync is on. Opening a book checks for progress. Closing it attempts to upload." = "Sync is on. Opening a book checks for progress. Closing it attempts to upload.";
+"Opening a book checks for remote progress. Pending uploads retry automatically." = "Opening a book checks for remote progress. Pending uploads retry automatically.";
 "Sync settings changed. Try again." = "Sync settings changed. Try again.";
 "System" = "System";
 "System Requirements" = "System Requirements";

@@ -23,6 +23,11 @@ struct RemoteProgress: Codable, Equatable {
     var device_id: String?
 
     var fingerprint: String {
+        let fields = [document, progress, percentage.map { String($0) }, timestamp.map { String($0) }, device, device_id]
+        return "v2:" + fields.map { $0.map { "\($0.utf8.count):\($0)" } ?? "-:" }.joined()
+    }
+
+    var legacyFingerprint: String {
         [progress ?? "", percentage.map { String($0) } ?? "", timestamp.map { String($0) } ?? "", device_id ?? ""].joined(separator: "|")
     }
 }
@@ -40,6 +45,8 @@ struct Book: Identifiable, Codable, Equatable {
     var position: ReadingPosition?
     var pendingSync = false
     var remoteBaseline: String?
+    var positionRevision: UUID?
+    var syncUpload: SyncUpload?
 }
 struct OPDSServer: Identifiable, Codable, Equatable {
     var id = UUID()
@@ -96,7 +103,7 @@ struct ReaderSettings: Codable, Equatable {
         pageMargins = try values.decodeIfPresent(Double.self, forKey: .pageMargins) ?? 1.0
     }
 }
-struct SyncSettings: Codable {
+struct SyncSettings: Codable, Equatable {
     var url = URL(string: "https://sync.koreader.rocks")!
     var username = ""
     var enabled = false

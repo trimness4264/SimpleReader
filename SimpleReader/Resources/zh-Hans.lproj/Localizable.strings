@@ -222,7 +222,7 @@
 "Sync failed. Tap for details." = "同步失败，点击查看";
 "Sync failed: %@" = "同步失败：%@";
 "Sync is off" = "同步未启用";
-"Sync is on. Opening a book checks for progress. Closing it attempts to upload." = "已启用：打开图书时拉取，关闭时尝试上传。";
+"Opening a book checks for remote progress. Pending uploads retry automatically." = "打开图书时检查远端进度，待上传的进度会自动重试。";
 "Sync settings changed. Try again." = "同步设置已改变，请重试";
 "System" = "跟随系统";
 "System Requirements" = "系统要求";

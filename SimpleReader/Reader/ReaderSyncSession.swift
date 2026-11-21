@@ -6,8 +6,9 @@ struct SyncPrompt: Identifiable {
     enum Response { case useServer, uploadLocal, keepLocal }
     let id = UUID()
     let kind: Kind
-    let remote: RemoteProgress
+    let offer: SyncCoordinator.RemoteOffer
     let revision: Int
+    var remote: RemoteProgress { offer.remote }
 }
 
 /// Coordinates progress checks and remote position offers for one open reader.
@@ -35,14 +36,14 @@ struct SyncPrompt: Identifiable {
     private let positions: ReaderPositionSession
     private let availability: @MainActor () -> Availability
     private let flush: @MainActor () async -> Void
-    private let move: @MainActor (RemoteProgress, Bool, @MainActor (RemoteMoveFailure) -> Void) async -> Void
+    private let move: @MainActor (SyncCoordinator.RemoteOffer, Bool, @MainActor (RemoteMoveFailure) -> Void) async -> Void
     @ObservationIgnored private var inFlight = false
     @ObservationIgnored private var isOpeningCheckPending = false
     @ObservationIgnored private var offeredApproximateFingerprint: String?
 
     init(bookID: UUID, coordinator: SyncCoordinator, positions: ReaderPositionSession,
          availability: @escaping @MainActor () -> Availability, flush: @escaping @MainActor () async -> Void,
-         move: @escaping @MainActor (RemoteProgress, Bool, @MainActor (RemoteMoveFailure) -> Void) async -> Void) {
+         move: @escaping @MainActor (SyncCoordinator.RemoteOffer, Bool, @MainActor (RemoteMoveFailure) -> Void) async -> Void) {
         self.bookID = bookID
         self.coordinator = coordinator
         self.positions = positions
@@ -73,10 +74,10 @@ struct SyncPrompt: Identifiable {
         if Task.isCancelled { scheduleOpeningCheck() }
     }
 
-    func synchronize(_ request: Request) async {
+    func synchronize(_ request: Request, resolving conflict: SyncPrompt? = nil) async {
         guard !Task.isCancelled, canStart(request) else { return }
         let coversOpeningCheck = request == .manual && isOpeningCheckPending
-        await run(request)
+        await run(request, resolving: conflict)
         if coversOpeningCheck && !Task.isCancelled {
             isOpeningCheckPending = false
         }
@@ -88,12 +89,13 @@ struct SyncPrompt: Identifiable {
         let availability = availability()
         switch (request, availability) {
         case (_, .unavailable): return false
+        case (.uploadLocal, .reading(isScrolling: true)): return false
         case (.leaving, _), (.uploadLocal, .inactive), (_, .reading): return true
         default: return false
         }
     }
 
-    private func run(_ request: Request) async {
+    private func run(_ request: Request, resolving conflict: SyncPrompt? = nil) async {
         inFlight = true
         defer { inFlight = false }
         let revision = positions.movementRevision
@@ -103,22 +105,36 @@ struct SyncPrompt: Identifiable {
             // Save the latest page before the coordinator takes a snapshot.
             if request != .opening && request != .leaving { await flush() }
             if let error = positions.persistenceError { throw error }
-            let outcome = try await coordinator.synchronize(bookID, preferLocal: request == .uploadLocal)
+            let resolution: SyncCoordinator.ConflictResolution?
+            if let conflict {
+                guard coordinator.isCurrent(conflict.offer) else {
+                    notice = String(localized: "Your current reading position was kept. Sync again later.")
+                    return
+                }
+                resolution = .init(offer: conflict.offer, isStillValid: { [weak self] in
+                    guard let self, positions.movementRevision == revision else { return false }
+                    switch availability() {
+                    case .inactive, .reading(isScrolling: false): return true
+                    default: return false
+                    }
+                })
+            } else { resolution = nil }
+            let outcome = try await coordinator.synchronize(bookID, resolving: resolution, pendingOnly: request == .leaving)
             try Task.checkCancellation()
             switch outcome {
-            case .idle: break
-            case .conflict(let remote), .remote(let remote):
+            case .idle, .unconfirmed: break
+            case .conflict(let offer), .remote(let offer):
                 // A response may arrive before a newer position has reached the store.
-                guard request != .leaving, canApplyRemote(revision: revision) else {
+                guard request != .leaving, canApplyRemote(revision: revision), coordinator.isCurrent(offer) else {
                     notice = String(localized: "Your current reading position was kept. Sync again later.")
                     return
                 }
                 if case .conflict = outcome {
-                    prompt = SyncPrompt(kind: .conflict, remote: remote, revision: revision)
-                } else if request != .manual && remote.fingerprint == offeredApproximateFingerprint {
+                    prompt = SyncPrompt(kind: .conflict, offer: offer, revision: revision)
+                } else if request != .manual && offer.remote.fingerprint == offeredApproximateFingerprint {
                     notice = String(localized: "Couldn’t resolve the exact remote position. Local progress was kept.")
                 } else {
-                    await receive(remote, revision: revision)
+                    await receive(offer, revision: revision)
                 }
             }
         } catch is CancellationError {
@@ -133,24 +149,24 @@ struct SyncPrompt: Identifiable {
         prompt = nil
         switch response {
         case .useServer:
-            await receive(offer.remote, approximate: offer.kind == .approximate, revision: offer.revision)
+            await receive(offer.offer, approximate: offer.kind == .approximate, revision: offer.revision)
         case .uploadLocal:
-            await synchronize(.uploadLocal)
+            await synchronize(.uploadLocal, resolving: offer)
         case .keepLocal:
             break
         }
         await resumeOpeningCheck()
     }
 
-    private func receive(_ remote: RemoteProgress, approximate: Bool = false, revision: Int) async {
-        guard canApplyRemote(revision: revision) else { return }
+    private func receive(_ offer: SyncCoordinator.RemoteOffer, approximate: Bool = false, revision: Int) async {
+        guard canApplyRemote(revision: revision), coordinator.isCurrent(offer) else { return }
         notice = nil
         error = nil
-        await move(remote, approximate) { failure in
+        await move(offer, approximate) { failure in
             error = String(localized: "Sync failed: \(failure.error.localizedDescription)")
             if failure.canApproximate && !approximate {
-                offeredApproximateFingerprint = remote.fingerprint
-                prompt = SyncPrompt(kind: .approximate, remote: remote, revision: positions.movementRevision)
+                offeredApproximateFingerprint = offer.remote.fingerprint
+                prompt = SyncPrompt(kind: .approximate, offer: offer, revision: positions.movementRevision)
             }
         }
     }

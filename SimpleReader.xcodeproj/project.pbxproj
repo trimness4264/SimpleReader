@@ -37,6 +37,8 @@
 		000000000000000000000032 /* SimpleReader/Services/EPUBSpine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000A /* SimpleReader/Services/EPUBSpine.swift */; };
 		000000000000000000000033 /* SimpleReader/Services/HTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000B /* SimpleReader/Services/HTTPClient.swift */; };
 		000000000000000000000034 /* SimpleReader/Services/KOReaderSyncClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000C /* SimpleReader/Services/KOReaderSyncClient.swift */; };
+		B91300000000000000000001 /* SimpleReader/Services/SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B91300000000000000000011 /* SimpleReader/Services/SyncCoordinator.swift */; };
+		B91300000000000000000002 /* SimpleReader/Services/SyncPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B91300000000000000000012 /* SimpleReader/Services/SyncPolicy.swift */; };
 		000000000000000000000035 /* SimpleReader/Services/OPDSClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000D /* SimpleReader/Services/OPDSClient.swift */; };
 		000000000000000000000036 /* SimpleReader/Services/ReadiumService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000E /* SimpleReader/Services/ReadiumService.swift */; };
 		000000000000000000000037 /* SimpleReader/Views/DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000F /* SimpleReader/Views/DownloadsView.swift */; };
@@ -119,6 +121,8 @@
 		00000000000000000000000A /* SimpleReader/Services/EPUBSpine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/EPUBSpine.swift; sourceTree = "<group>"; };
 		00000000000000000000000B /* SimpleReader/Services/HTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/HTTPClient.swift; sourceTree = "<group>"; };
 		00000000000000000000000C /* SimpleReader/Services/KOReaderSyncClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/KOReaderSyncClient.swift; sourceTree = "<group>"; };
+		B91300000000000000000011 /* SimpleReader/Services/SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/SyncCoordinator.swift; sourceTree = "<group>"; };
+		B91300000000000000000012 /* SimpleReader/Services/SyncPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/SyncPolicy.swift; sourceTree = "<group>"; };
 		00000000000000000000000D /* SimpleReader/Services/OPDSClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/OPDSClient.swift; sourceTree = "<group>"; };
 		00000000000000000000000E /* SimpleReader/Services/ReadiumService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Services/ReadiumService.swift; sourceTree = "<group>"; };
 		00000000000000000000000F /* SimpleReader/Views/DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/DownloadsView.swift; sourceTree = "<group>"; };
@@ -221,6 +225,8 @@
 				00000000000000000000000A /* SimpleReader/Services/EPUBSpine.swift */,
 				00000000000000000000000B /* SimpleReader/Services/HTTPClient.swift */,
 				00000000000000000000000C /* SimpleReader/Services/KOReaderSyncClient.swift */,
+				B91300000000000000000011 /* SimpleReader/Services/SyncCoordinator.swift */,
+				B91300000000000000000012 /* SimpleReader/Services/SyncPolicy.swift */,
 				00000000000000000000000D /* SimpleReader/Services/OPDSClient.swift */,
 				A7C18000000000000000001C /* SimpleReader/Services/OPDSCatalogSession.swift */,
 				00000000000000000000000E /* SimpleReader/Services/ReadiumService.swift */,
@@ -429,6 +435,8 @@
 				000000000000000000000032 /* SimpleReader/Services/EPUBSpine.swift in Sources */,
 				000000000000000000000033 /* SimpleReader/Services/HTTPClient.swift in Sources */,
 				000000000000000000000034 /* SimpleReader/Services/KOReaderSyncClient.swift in Sources */,
+				B91300000000000000000001 /* SimpleReader/Services/SyncCoordinator.swift in Sources */,
+				B91300000000000000000002 /* SimpleReader/Services/SyncPolicy.swift in Sources */,
 				000000000000000000000035 /* SimpleReader/Services/OPDSClient.swift in Sources */,
 				A7C18000000000000000001B /* SimpleReader/Services/OPDSCatalogSession.swift in Sources */,
 				000000000000000000000036 /* SimpleReader/Services/ReadiumService.swift in Sources */,

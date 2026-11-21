@@ -10,7 +10,7 @@ import ReadiumShared
     }
 
     enum Source {
-        case checkpoint, movement, remote(RemoteProgress)
+        case checkpoint, movement, remote(SyncCoordinator.RemoteOffer)
     }
 
     enum Activity { case idle, navigating, turningPage, restoring }
@@ -207,8 +207,8 @@ import ReadiumShared
         do {
             guard var book = store.book(bookID) else { throw AppFailure("The book has been deleted.") }
             switch source {
-            case .remote(let remote):
-                try sync.acceptRemote(remote, id: bookID, position: position)
+            case .remote(let offer):
+                try sync.acceptRemote(offer, position: position)
             case .checkpoint, .movement:
                 if case .movement = source {
                     let old = book.position
@@ -227,6 +227,7 @@ import ReadiumShared
                 if book.position != position {
                     book.position = position
                     try store.save(book)
+                    if book.pendingSync { sync.positionDidChange(bookID) }
                 }
             }
             current = position
@@ -236,6 +237,8 @@ import ReadiumShared
             }
             persistenceError = nil
             return changed
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             persistenceError = error
             throw error

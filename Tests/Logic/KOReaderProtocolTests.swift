@@ -13,16 +13,23 @@ final class KOReaderProtocolTests: XCTestCase {
             XCTAssertEqual(body["progress"] as? String, "3")
             XCTAssertEqual(body["percentage"] as? Double, 0.25)
             XCTAssertEqual(body["document"] as? String, "document")
+            XCTAssertEqual(body["device"] as? String, "Simple Reader")
             XCTAssertEqual(body["device_id"] as? String, "device")
             received.fulfill()
-            return (200, "{}")
+            return (200, #"{"document":"document","timestamp":200}"#)
         }
         var settings = SyncSettings()
         settings.url = origin
         settings.username = "reader"
 
-        try await KOReaderSyncClient(settings: settings, password: "secret", http: http)
-            .put(document: "document", position: readingPosition(2), deviceID: "device")
+        var book = sampleBook(position: readingPosition(2))
+        book.pendingSync = true
+        guard case .upload(let position) = SyncPolicy.decide(book: book, remote: nil) else { return XCTFail("Expected an upload") }
+        let receipt = try await KOReaderSyncClient(settings: settings, password: "secret", http: http)
+            .put(RemoteProgress(document: "document", progress: position.pointer, percentage: position.percentage,
+                device: "Simple Reader", device_id: "device"))
+        XCTAssertEqual(receipt.document, "document")
+        XCTAssertEqual(receipt.timestamp, 200)
         await fulfillment(of: [received], timeout: 2)
     }
 

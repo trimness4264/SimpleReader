@@ -545,6 +545,42 @@ import UIKit
         await session.close()
     }
 
+    func testMovingWhileAConflictIsOpenInvalidatesItsUploadAction() async throws {
+        let store = try library()
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: pdfFile(in: temporaryDirectory()))
+        let server = ProgressServer()
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient(), clientFactory: { server }))
+        let window = present(session.container)
+        defer { window.isHidden = true }
+        await session.load()
+        let firstJump = await session.jump(toPage: 2)
+        XCTAssertTrue(firstJump)
+        var settings = store.settings
+        settings.sync.enabled = true
+        try store.saveSettings(settings)
+        server.remote = RemoteProgress(progress: "5", percentage: 1, timestamp: 200, device_id: "other")
+        await session.synchronize()
+        let oldOffer = try XCTUnwrap(session.prompt)
+
+        let nextJump = await session.jump(toPage: 3)
+        XCTAssertTrue(nextJump)
+        await session.respond(to: oldOffer, with: .uploadLocal)
+
+        XCTAssertTrue(server.uploads.isEmpty)
+        XCTAssertEqual(store.book(book.id)?.position?.pdfPage, 2)
+        XCTAssertEqual(store.book(book.id)?.pendingSync, true)
+        XCTAssertNil(session.prompt)
+
+        await session.synchronize()
+        let newOffer = try XCTUnwrap(session.prompt)
+        await session.respond(to: newOffer, with: .uploadLocal)
+        XCTAssertEqual(server.uploads.map(\.progress), ["3"])
+        XCTAssertEqual(store.book(book.id)?.pendingSync, false)
+        await session.close()
+    }
+
     func testFailedRemotePDFJumpPreservesLocalPositionAndReturnHistory() async throws {
         let store = try library()
         let readium = ReadiumService()

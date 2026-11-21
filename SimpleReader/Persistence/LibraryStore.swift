@@ -5,6 +5,7 @@ import CoreData
 @MainActor final class LibraryStore: ObservableObject {
     @Published private(set) var books: [Book] = []
     @Published private(set) var settings = AppSettings()
+    private(set) var syncSettingsRevision = UUID()
     private let container: NSPersistentContainer
     let root: URL
 
@@ -56,8 +57,13 @@ import CoreData
     func fileURL(_ relative: String) -> URL { root.appendingPathComponent(relative) }
     func book(_ id: UUID) -> Book? { books.first { $0.id == id } }
     func save(_ book: Book) throws {
+        var book = book
+        let index = books.firstIndex { $0.id == book.id }
+        if let index, books[index].position != book.position {
+            book.positionRevision = UUID()
+        }
         try write(book, key: book.id.uuidString)
-        if let index = books.firstIndex(where: { $0.id == book.id }) { books[index] = book }
+        if let index { books[index] = book }
         else { books.append(book) }
     }
     func updateReaderSettings(_ change: (inout ReaderSettings) -> Void) throws {
@@ -70,6 +76,7 @@ import CoreData
         let updatedBooks: [Book] = resettingSyncBaselines ? books.map { book in
             var updated = book
             updated.remoteBaseline = nil
+            updated.syncUpload = nil
             return updated
         } : []
         let context = container.viewContext
@@ -78,6 +85,7 @@ import CoreData
             try stage(settings, key: "settings")
             try context.save()
         } catch { context.rollback(); throw error }
+        if self.settings.sync != settings.sync { syncSettingsRevision = UUID() }
         self.settings = settings
         if resettingSyncBaselines { books = updatedBooks }
     }

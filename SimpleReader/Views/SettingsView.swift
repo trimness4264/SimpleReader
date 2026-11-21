@@ -10,7 +10,7 @@ struct SettingsView: View {
         Form {
             Section(header: Text("KOReader Sync")) {
                 Button { editing = true } label: { HStack { Text("Server and Account"); Spacer(); Text(store.settings.sync.username.isEmpty ? String(localized: "Not configured") : store.settings.sync.username).foregroundColor(.secondary) } }
-                Text(store.settings.sync.enabled ? "Sync is on. Opening a book checks for progress. Closing it attempts to upload." : "Sync is off").font(.caption).foregroundColor(.secondary)
+                Text(store.settings.sync.enabled ? "Opening a book checks for remote progress. Pending uploads retry automatically." : "Sync is off").font(.caption).foregroundColor(.secondary)
                 Text(sync.status).font(.caption).foregroundColor(.secondary)
             }
             Section(header: Text("Reading")) {
