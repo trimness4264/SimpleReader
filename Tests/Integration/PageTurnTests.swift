@@ -1,5 +1,8 @@
+import Combine
 import XCTest
 import PDFKit
+import ReadiumShared
+import WebKit
 @testable import SimpleReader
 
 @MainActor final class PageTurnTests: XCTestCase {
@@ -218,6 +221,81 @@ import PDFKit
         let settled = try XCTUnwrap(store.book(book.id)?.position?.xpointer)
         XCTAssertNotEqual(settled, initial)
         XCTAssertEqual(store.book(book.id)?.pendingSync, true)
+        await session.close()
+    }
+
+    func testEPUBPageCurlReversesAndCancelsBeforeCommittingAcrossChapters() async throws {
+        try XCTSkipIf(UIAccessibility.isReduceMotionEnabled, "This regression inspects the interactive curl.")
+        let store = try library()
+        try store.updateReaderSettings { $0.pageTurnStyle = .curl }
+        let readium = ReadiumService()
+        let book = try await BookImportService(store: store, readium: readium).importBook(from: epubFile())
+        let session = ReaderSession(bookID: book.id, store: store, readium: readium,
+            sync: SyncCoordinator(store: store, http: HTTPClient()))
+        let container = session.container
+        let window = present(container)
+        defer { window.isHidden = true }
+        await session.load()
+        XCTAssertTrue(session.ready, session.error ?? "Reader not ready")
+        await session.go(try XCTUnwrap(session.contents.first { $0.title == "Second" }))
+        let origin = try XCTUnwrap(store.book(book.id)?.position)
+        func savedChapter() throws -> String {
+            let json = try XCTUnwrap(store.book(book.id)?.position?.locatorJSON)
+            return try XCTUnwrap(Locator(jsonString: json)).href.string
+        }
+        XCTAssertTrue(try savedChapter().hasSuffix("second.xhtml"))
+
+        var saves: [ReadingPosition] = []
+        let subscription = store.$books.dropFirst().sink { books in
+            if let position = books.first(where: { $0.id == book.id })?.position { saves.append(position) }
+        }
+        defer { subscription.cancel() }
+
+        func drag(_ fraction: CGFloat) -> CGPoint { CGPoint(x: container.view.bounds.width * fraction, y: 0) }
+        func settle() async throws {
+            let deadline = ContinuousClock.now + .seconds(10)
+            while container.isTurningPage && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertFalse(container.isTurningPage)
+            XCTAssertNil(session.error)
+        }
+
+        XCTAssertTrue(container.beginPageTurn(translation: drag(-0.4)))
+        container.updatePageTurn(translation: drag(-0.4))
+        let curl = try XCTUnwrap(container.view.subviews.compactMap { $0 as? PageCurlView }.first)
+        let content = try XCTUnwrap(container.children.first?.view)
+        func revealedChapter() async throws -> String {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while curl.progress == 0 && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(16))
+            }
+            XCTAssertGreaterThan(curl.progress, 0)
+            let webView = try XCTUnwrap(ReadiumPageTurnSurface.presentedWebView(in: content, viewport: container.view))
+            let href = try await webView.evaluateJavaScript("window.readium.link.href")
+            return try XCTUnwrap(href as? String)
+        }
+        let nextChapter = try await revealedChapter()
+        XCTAssertTrue(nextChapter.hasSuffix("image.xhtml"))
+        container.updatePageTurn(translation: drag(0.4))
+        let previousChapter = try await revealedChapter()
+        XCTAssertTrue(previousChapter.hasSuffix("first.xhtml"))
+        XCTAssertEqual(store.book(book.id)?.position, origin)
+        container.finishPageTurn(translation: drag(0.17), velocity: CGPoint(x: -450, y: 0))
+        try await settle()
+        XCTAssertNil(curl.superview)
+        XCTAssertEqual(store.book(book.id)?.position, origin)
+        XCTAssertTrue(saves.isEmpty)
+
+        for (index, direction) in [1.0, -1.0, 1.0].enumerated() {
+            let translation = drag(direction * 0.2)
+            XCTAssertTrue(container.beginPageTurn(translation: translation))
+            container.finishPageTurn(translation: translation, velocity: CGPoint(x: direction * 900, y: 0))
+            try await settle()
+            let chapter = direction > 0 ? "first.xhtml" : "second.xhtml"
+            XCTAssertTrue(try savedChapter().hasSuffix(chapter))
+            XCTAssertEqual(saves.count, index + 1)
+        }
         await session.close()
     }
 

@@ -3,6 +3,7 @@ import SwiftUI
 struct ReaderPreferencesView: View {
     let settings: ReaderSettings
     var supportsScrolling = true
+    var showsPageTurnStyle = true
     let update: ((inout ReaderSettings) -> Void) throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
@@ -15,6 +16,14 @@ struct ReaderPreferencesView: View {
                         Text("Continuous Scrolling").tag(ReadingLayout.scroll)
                     }.pickerStyle(.segmented)
                 }
+            }
+            if showsPageTurnStyle && (!supportsScrolling || settings.layout == .paginated) {
+                Picker("Page Turn Effect", selection: preference(\.pageTurnStyle)) {
+                    Text("Slide").tag(PageTurnStyle.slide)
+                    Text("Page Curl").tag(PageTurnStyle.curl)
+                }
+            }
+            if supportsScrolling {
                 Section(header: Text("Typography")) {
                     Picker("Font", selection: preference(\.font)) {
                         Text("Book Serif").tag(ReaderFont.serif)

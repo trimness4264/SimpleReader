@@ -102,6 +102,7 @@ import ReadiumShared
         }.store(in: &libraryUpdates)
         store.$settings.map(\.reader).removeDuplicates().sink { [weak self] settings in
             self?.readerSettings = settings
+            self?.container.pageTurnStyle = settings.pageTurnStyle
         }.store(in: &libraryUpdates)
     }
     func toggleControls() {
@@ -191,8 +192,11 @@ import ReadiumShared
     }
 
     func saveReaderSettings(_ change: (inout ReaderSettings) -> Void) throws {
+        var previous = store.settings.reader
         try store.updateReaderSettings(change)
-        updatePreferences()
+        let updated = store.settings.reader
+        previous.pageTurnStyle = updated.pageTurnStyle
+        if previous != updated { updatePreferences() }
     }
 
     func updatePreferences() {

@@ -169,6 +169,8 @@
 "Page" = "Page";
 "Page %lld" = "Page %lld";
 "Page %lld of %lld" = "Page %1$lld of %2$lld";
+"Page Curl" = "Page Curl";
+"Page Turn Effect" = "Page Turn Effect";
 "Page margins" = "Page margins";
 "Page margins: %.2f×" = "Page margins: %.2f×";
 "Page number outside this book’s range." = "Page number outside this book’s range.";
@@ -212,6 +214,7 @@
 "Show Compact Progress Indicator" = "Show Compact Progress Indicator";
 "Show Page Turn Buttons" = "Show Page Turn Buttons";
 "Show or hide reading controls" = "Show or hide reading controls";
+"Slide" = "Slide";
 "Sort" = "Sort";
 "Supported Formats" = "Supported Formats";
 "Switching chapters…" = "Switching chapters…";

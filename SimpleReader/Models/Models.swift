@@ -57,6 +57,9 @@ struct OPDSServer: Identifiable, Codable, Equatable {
 enum ReadingLayout: String, Codable {
     case paginated, scroll
 }
+enum PageTurnStyle: String, Codable {
+    case slide, curl
+}
 enum ReaderFont: String, Codable {
     case serif, system
 
@@ -84,13 +87,14 @@ struct ReaderSettings: Codable, Equatable {
     var fontSize: Double = 110
     var theme: ReaderTheme = .system
     var layout: ReadingLayout = .paginated
+    var pageTurnStyle: PageTurnStyle = .slide
     var font: ReaderFont = .serif
     var lineHeight: Double = 1.65
     var pageMargins: Double = 1.0
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case fontSize, theme, layout, font, lineHeight, pageMargins }
+    private enum CodingKeys: String, CodingKey { case fontSize, theme, layout, pageTurnStyle, font, lineHeight, pageMargins }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         fontSize = try values.decodeIfPresent(Double.self, forKey: .fontSize) ?? 110
@@ -98,6 +102,9 @@ struct ReaderSettings: Codable, Equatable {
             theme = ReaderTheme(rawValue: value) ?? .system
         }
         layout = try values.decodeIfPresent(ReadingLayout.self, forKey: .layout) ?? .paginated
+        if let value = try values.decodeIfPresent(String.self, forKey: .pageTurnStyle) {
+            pageTurnStyle = PageTurnStyle(rawValue: value) ?? .slide
+        }
         font = try values.decodeIfPresent(ReaderFont.self, forKey: .font) ?? .serif
         lineHeight = try values.decodeIfPresent(Double.self, forKey: .lineHeight) ?? 1.65
         pageMargins = try values.decodeIfPresent(Double.self, forKey: .pageMargins) ?? 1.0

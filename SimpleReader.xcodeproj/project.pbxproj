@@ -13,6 +13,7 @@
 		A7C18000000000000000001D /* SimpleReader/Views/OPDSCatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000001E /* SimpleReader/Views/OPDSCatalogView.swift */; };
 		A7C180000000000000000015 /* SimpleReader/Reader/EPUBReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000016 /* SimpleReader/Reader/EPUBReader.swift */; };
 		A7C180000000000000000013 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000014 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift */; };
+		C61000000000000000000001 /* SimpleReader/Reader/PageCurlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C61000000000000000000002 /* SimpleReader/Reader/PageCurlView.swift */; };
 		A7C18000000000000000000D /* SimpleReader/Reader/ContinuousChapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */; };
 		A7C18000000000000000000F /* SimpleReader/Reader/ContinuousEPUBStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000010 /* SimpleReader/Reader/ContinuousEPUBStyle.swift */; };
 		A7C180000000000000000011 /* SimpleReader/Resources/ContinuousChapter.js in Resources */ = {isa = PBXBuildFile; fileRef = A7C180000000000000000012 /* SimpleReader/Resources/ContinuousChapter.js */; };
@@ -95,6 +96,7 @@
 		A7C18000000000000000001E /* SimpleReader/Views/OPDSCatalogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Views/OPDSCatalogView.swift; sourceTree = "<group>"; };
 		A7C180000000000000000016 /* SimpleReader/Reader/EPUBReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/EPUBReader.swift; sourceTree = "<group>"; };
 		A7C180000000000000000014 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ReadiumPageTurnSurface.swift; sourceTree = "<group>"; };
+		C61000000000000000000002 /* SimpleReader/Reader/PageCurlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/PageCurlView.swift; sourceTree = "<group>"; };
 		A7C18000000000000000000E /* SimpleReader/Reader/ContinuousChapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousChapter.swift; sourceTree = "<group>"; };
 		A7C180000000000000000010 /* SimpleReader/Reader/ContinuousEPUBStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleReader/Reader/ContinuousEPUBStyle.swift; sourceTree = "<group>"; };
 		A7C180000000000000000012 /* SimpleReader/Resources/ContinuousChapter.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = SimpleReader/Resources/ContinuousChapter.js; sourceTree = "<group>"; };
@@ -200,6 +202,7 @@
 				B12000000000000000000002 /* SimpleReader/Reader/PaginatedEPUBNavigation.swift */,
 				A7C180000000000000000004 /* SimpleReader/Reader/ReaderContainerController.swift */,
 				A7C180000000000000000014 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift */,
+				C61000000000000000000002 /* SimpleReader/Reader/PageCurlView.swift */,
 				A7C180000000000000000006 /* SimpleReader/Persistence/AccountSettings.swift */,
 				000000000000000000000001 /* SimpleReader/App/SimpleReaderApp.swift */,
 				000000000000000000000002 /* SimpleReader/Models/Models.swift */,
@@ -410,6 +413,7 @@
 				B12000000000000000000001 /* SimpleReader/Reader/PaginatedEPUBNavigation.swift in Sources */,
 				A7C180000000000000000003 /* SimpleReader/Reader/ReaderContainerController.swift in Sources */,
 				A7C180000000000000000013 /* SimpleReader/Reader/ReadiumPageTurnSurface.swift in Sources */,
+				C61000000000000000000001 /* SimpleReader/Reader/PageCurlView.swift in Sources */,
 				A7C180000000000000000005 /* SimpleReader/Persistence/AccountSettings.swift in Sources */,
 				000000000000000000000029 /* SimpleReader/App/SimpleReaderApp.swift in Sources */,
 				00000000000000000000002A /* SimpleReader/Models/Models.swift in Sources */,

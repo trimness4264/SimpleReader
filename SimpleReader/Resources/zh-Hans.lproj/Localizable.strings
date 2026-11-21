@@ -172,6 +172,8 @@
 "Page margins" = "页边距";
 "Page margins: %.2f×" = "页边距 %.2f 倍";
 "Page number outside this book’s range." = "页码不在本书范围内";
+"Page Curl" = "仿真翻页";
+"Page Turn Effect" = "翻页效果";
 "Paginated" = "分页";
 "Password" = "密码";
 "Percentage" = "百分比";
@@ -212,6 +214,7 @@
 "Show Compact Progress Indicator" = "显示细小进度";
 "Show Page Turn Buttons" = "显示翻页按钮";
 "Show or hide reading controls" = "显示或隐藏阅读操作栏";
+"Slide" = "滑动翻页";
 "Sort" = "排序";
 "Supported Formats" = "支持格式";
 "Switching chapters…" = "正在切换章节";

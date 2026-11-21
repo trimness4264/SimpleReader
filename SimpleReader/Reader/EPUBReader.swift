@@ -120,7 +120,8 @@ import ReadiumNavigator
         switch renderer {
         case .paginated(let navigator):
             container.replaceChild(with: navigator,
-                pageTurnSurface: ReadiumPageTurnSurface(content: navigator.view, viewport: container.view))
+                pageTurnSurface: ReadiumPageTurnSurface(content: navigator.view, viewport: container.view,
+                    isFixedLayout: !supportsScrolling))
         case .continuous(let navigator):
             container.replaceChild(with: navigator)
         }
@@ -328,7 +329,7 @@ import ReadiumNavigator
 
     func canBeginPageTurn(isGesture: Bool) -> Bool {
         guard !closed, case .paginated(let navigator) = renderer else { return false }
-        return !isGesture || (supportsScrolling && !navigator.settings.scroll && navigator.currentSelection == nil)
+        return !isGesture || (!navigator.settings.scroll && navigator.currentSelection == nil)
     }
 
     func towardLeft(forward: Bool) -> Bool {

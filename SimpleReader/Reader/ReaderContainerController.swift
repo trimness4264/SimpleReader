@@ -15,6 +15,18 @@ enum PageTurnOutcome {
     func pageTurnWasCancelled(needsRestoration: Bool)
 }
 
+@MainActor func animatePageTurnFrames(duration: TimeInterval, isCurrent: @MainActor () -> Bool,
+                                     update: (CGFloat) -> Void) async {
+    let start = CACurrentMediaTime()
+    while isCurrent() {
+        let progress = UIAccessibility.isReduceMotionEnabled ? 1 : min(1, (CACurrentMediaTime() - start) / duration)
+        update(CGFloat(1 - pow(1 - progress, 3)))
+        if progress >= 1 { return }
+        do { try await Task.sleep(for: .milliseconds(16)) }
+        catch { return }
+    }
+}
+
 private final class ReaderContainerView: UIView {
     var onSizeWillChange: (() -> Void)?
 
@@ -41,12 +53,17 @@ private final class ReaderContainerView: UIView {
     }
 
     let surface: ReadiumPageTurnSurface?
+    let style: PageTurnStyle
     var navigationStarted = false
     private(set) var phase = Phase.active
     private var preview: Preview?
+    private var curl: PageCurlView?
     private var animator: UIViewPropertyAnimator?
 
-    init(surface: ReadiumPageTurnSurface?) { self.surface = surface }
+    init(surface: ReadiumPageTurnSurface?, style: PageTurnStyle) {
+        self.surface = surface
+        self.style = surface == nil ? .slide : style
+    }
 
     func capturePreview(of content: UIView?, in viewport: UIView) -> Bool {
         guard phase == .active, let content, let snapshot = content.snapshotView(afterScreenUpdates: false) else { return false }
@@ -62,14 +79,20 @@ private final class ReaderContainerView: UIView {
         return true
     }
 
-    func animate(in viewport: UIView, content: UIView?, direction: CGFloat, isCurrent: @MainActor () -> Bool,
+    func animate(in viewport: UIView, content: UIView?, direction: CGFloat, animate: Bool, isCurrent: @MainActor () -> Bool,
                  navigate: @MainActor () async -> Bool) async -> Bool {
         defer { clearPreview() }
-        if preview != nil { return await navigate() }
-        guard !UIAccessibility.isReduceMotionEnabled, viewport.window != nil, viewport.bounds.width > 0,
-              capturePreview(of: content, in: viewport), let preview else {
-            return await navigate()
+        if !animate || preview != nil { return await navigate() }
+        guard !UIAccessibility.isReduceMotionEnabled, viewport.window != nil, viewport.bounds.width > 0 else { return await navigate() }
+        if style == .curl, let content, let curl = PageCurlView.capture(content, in: viewport) {
+            self.curl = curl
+            guard await navigate(), isCurrent() else { return false }
+            await animatePageTurnFrames(duration: 0.28, isCurrent: isCurrent) { fraction in
+                curl.show(fraction, towardLeft: direction > 0)
+            }
+            return isCurrent()
         }
+        guard capturePreview(of: content, in: viewport), let preview else { return await navigate() }
         let size = viewport.bounds.size
 
         // Animate only the views after Readium finishes its non-animated navigation.
@@ -104,6 +127,8 @@ private final class ReaderContainerView: UIView {
     }
 
     private func clearPreview() {
+        curl?.removeFromSuperview()
+        curl = nil
         let animator = animator
         let preview = preview
         self.animator = nil
@@ -125,6 +150,9 @@ private final class ReaderContainerView: UIView {
     private var transitioning = false
     private var activeTurn: PageTurnTransition?
     private var pageTurnSurface: ReadiumPageTurnSurface?
+    var pageTurnStyle: PageTurnStyle = .slide {
+        didSet { if oldValue != pageTurnStyle { cancelPageTransition() } }
+    }
     var onLayout: ((CGSize, UIUserInterfaceIdiom) -> Void)?
     var onLayoutWillChange: (() -> Void)?
     var onLayoutDidChange: (() -> Void)?
@@ -179,14 +207,16 @@ private final class ReaderContainerView: UIView {
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        guard gestureRecognizer === pageTurnPan, pageTurnDelegate?.canBeginPageTurn(isGesture: true) == true else { return false }
+        guard gestureRecognizer === pageTurnPan, pageTurnSurface?.allowsDrag(style: pageTurnStyle) != false,
+              pageTurnDelegate?.canBeginPageTurn(isGesture: true) == true else { return false }
         pageTurnSurface?.registerNativePans(requiringToFail: pageTurnPan)
         return true
     }
 
     func beginPageTurn(translation: CGPoint) -> Bool {
-        guard abs(translation.x) > abs(translation.y), let turn = beginTurn(isGesture: true) else { return false }
-        turn.surface?.beginDrag()
+        guard abs(translation.x) > abs(translation.y), pageTurnSurface?.allowsDrag(style: pageTurnStyle) != false,
+              let turn = beginTurn(isGesture: true) else { return false }
+        turn.surface?.beginDrag(style: turn.style)
         return true
     }
 
@@ -196,7 +226,7 @@ private final class ReaderContainerView: UIView {
 
     @objc func handlePageTurn(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
-        case .changed:
+        case .began, .changed:
             updatePageTurn(translation: gesture.translation(in: view))
         case .ended:
             finishPageTurn(translation: gesture.translation(in: view), velocity: gesture.velocity(in: view))
@@ -212,6 +242,7 @@ private final class ReaderContainerView: UIView {
         let projected = translation.x + velocity.x * 0.12
         let crossedThreshold = abs(projected) >= max(32, view.bounds.width * 0.2)
         let quickSwipe = abs(translation.x) >= 8 && abs(velocity.x) >= 450
+            && (turn.style == .slide || translation.x * velocity.x > 0)
         let commit = translation.x * projected > 0 && (crossedThreshold || quickSwipe)
         updatePageTurn(translation: translation)
         guard isCurrent(turn) else { return }
@@ -220,18 +251,18 @@ private final class ReaderContainerView: UIView {
             guard let self, self.isCurrent(turn) else { return }
             let completion: ReadiumPageTurnSurface.Completion
             if let surface = turn.surface {
-                completion = await surface.finishDrag(commit: commit, velocity: velocity.x, isCurrent: {
+                completion = await surface.finishDrag(commit: commit, towardLeft: translation.x < 0, velocity: velocity.x, isCurrent: {
                     self.isCurrent(turn)
                 }, capturePreview: {
-                    turn.capturePreview(of: self.children.first?.view, in: self.view)
+                    _ = turn.capturePreview(of: self.children.first?.view, in: self.view)
                 })
             } else {
-                completion = commit ? .navigate : .complete(committed: false)
+                completion = commit ? .navigate(animate: true) : .complete(committed: false)
             }
             guard self.isCurrent(turn) else { return }
             switch completion {
-            case .navigate:
-                await self.performPageTurn(towardLeft: projected < 0, turn: turn)
+            case .navigate(let animate):
+                await self.performPageTurn(towardLeft: projected < 0, turn: turn, animate: animate)
             case .complete(let committed):
                 await self.completePageTurn(committed ? .settled : .unchanged, turn: turn)
             }
@@ -246,7 +277,7 @@ private final class ReaderContainerView: UIView {
 
     private func beginTurn(isGesture: Bool) -> PageTurnTransition? {
         guard activeTurn == nil, pageTurnDelegate?.canBeginPageTurn(isGesture: isGesture) == true else { return nil }
-        let turn = PageTurnTransition(surface: pageTurnSurface)
+        let turn = PageTurnTransition(surface: pageTurnSurface, style: pageTurnStyle)
         activeTurn = turn
         pageTurnDelegate?.pageTurnWillBegin()
         return isCurrent(turn) ? turn : nil
@@ -256,11 +287,11 @@ private final class ReaderContainerView: UIView {
         activeTurn === turn && turn.phase == .active
     }
 
-    private func performPageTurn(towardLeft: Bool, turn: PageTurnTransition) async {
+    private func performPageTurn(towardLeft: Bool, turn: PageTurnTransition, animate: Bool = true) async {
         guard isCurrent(turn) else { return }
         finishingTurn = turn
         var failure: Error?
-        let moved = await turn.animate(in: view, content: readerContentView, direction: towardLeft ? 1 : -1,
+        let moved = await turn.animate(in: view, content: readerContentView, direction: towardLeft ? 1 : -1, animate: animate,
             isCurrent: { self.isCurrent(turn) }) {
             do {
                 guard self.isCurrent(turn) else { return false }

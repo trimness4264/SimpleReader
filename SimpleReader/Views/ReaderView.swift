@@ -132,7 +132,7 @@ private struct BookReaderPreferencesView: View {
     var body: some View {
         NavigationStack {
             ReaderPreferencesView(settings: session.readerSettings, supportsScrolling: session.supportsScrolling,
-                update: session.saveReaderSettings)
+                showsPageTurnStyle: session.bookFormat == .epub, update: session.saveReaderSettings)
         }
     }
 }
